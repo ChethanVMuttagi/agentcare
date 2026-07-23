@@ -26,7 +26,8 @@ strict boundaries around what the system is and isn't allowed to do.
 ## Current Development Status
 
 This project is being built **story by story**, starting from a secure,
-well-documented repository foundation before any application logic exists.
+well-documented repository foundation before any healthcare domain logic
+or agent workflows exist.
 
 **Implemented now:**
 - Repository structure and directory layout (`backend/`, `frontend/`,
@@ -34,15 +35,22 @@ well-documented repository foundation before any application logic exists.
 - Security-first `.gitignore` and safe `.env.example`
 - Security policy ([SECURITY.md](SECURITY.md))
 - Contribution guidelines ([CONTRIBUTING.md](CONTRIBUTING.md))
-- Documentation foundation ([docs/README.md](docs/README.md)) and
-  Architecture Decision Record process ([docs/adr/](docs/adr/README.md))
+- Documentation foundation ([docs/README.md](docs/README.md)),
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and the Architecture
+  Decision Record process ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
+- **FastAPI backend application foundation** (`backend/app/`): an
+  application factory, versioned API routing under `/api/v1`, health and
+  readiness endpoints, typed environment-based configuration
+  (`pydantic-settings`), a structured logging foundation, and a
+  standardized API error/exception-handling architecture
+- Backend test suite (`backend/tests/`) exercising the real FastAPI app
 
 **Not yet implemented** (planned, across future stories):
-- FastAPI backend application
 - PostgreSQL schema and SQLAlchemy 2.x models
 - Alembic migrations
-- Pydantic Settings-based configuration
+- Domain models (patients, appointments, referrals, etc.)
+- Authentication and RBAC
 - LangGraph-based agent workflows
 - LLM provider abstraction (Groq / OpenAI / Anthropic)
 - Next.js frontend
@@ -103,21 +111,58 @@ direction, not current state.
 
 ```
 agentcare/
-├── backend/            # FastAPI application (not yet implemented)
-├── frontend/           # Next.js application (not yet implemented)
-├── docs/               # Project documentation, see docs/README.md
-│   └── adr/            # Architecture Decision Records
-├── infrastructure/     # Deployment/infra config (not yet implemented)
-├── scripts/            # Developer/operational scripts (not yet implemented)
-├── tests/              # Cross-cutting/integration tests (not yet implemented)
+├── backend/             # FastAPI application foundation
+│   ├── app/
+│   │   ├── main.py       # Application factory: create_app() -> FastAPI
+│   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready)
+│   │   ├── core/         # Settings, logging, exceptions
+│   │   └── schemas/      # Shared Pydantic schemas (errors, health)
+│   ├── tests/            # Backend test suite
+│   └── pyproject.toml    # Backend dependencies + tool configuration
+├── frontend/            # Next.js application (not yet implemented)
+├── docs/                # Project documentation, see docs/README.md
+│   ├── ARCHITECTURE.md   # Current + planned backend architecture
+│   └── adr/              # Architecture Decision Records
+├── infrastructure/      # Deployment/infra config (not yet implemented)
+├── scripts/             # Developer/operational scripts (not yet implemented)
+├── tests/               # Cross-cutting/integration tests (not yet implemented)
 ├── .github/
-│   ├── workflows/      # CI/CD workflows (not yet added)
+│   ├── workflows/       # CI/CD workflows (not yet added)
 │   └── pull_request_template.md
-├── .env.example        # Safe, placeholder-only environment template
+├── .env.example         # Safe, placeholder-only environment template
 ├── .gitignore
 ├── SECURITY.md
 ├── CONTRIBUTING.md
 └── README.md
+```
+
+## Backend Setup (Local Development)
+
+Requires **Python 3.12**. Commands below use PowerShell (current
+development happens on Windows).
+
+```powershell
+cd backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+copy ..\.env.example .env    # creates backend\.env; then edit it with your own local values
+uvicorn app.main:app --reload
+```
+
+The app starts without any database or LLM credentials configured — none
+are integrated yet in this story. Once running:
+
+- Health: `http://127.0.0.1:8000/api/v1/health`
+- Readiness: `http://127.0.0.1:8000/api/v1/ready`
+- Interactive API docs: `http://127.0.0.1:8000/docs`
+
+Run the test suite and quality checks from `backend/`:
+
+```powershell
+pytest
+ruff check .
+mypy app
 ```
 
 ## Security Warning

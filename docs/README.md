@@ -6,10 +6,11 @@ documentation is not backfilled after the fact.
 
 ## Status
 
-As of STORY-000 (repository & security foundation), only this index and the
-[Architecture Decision Records](adr/README.md) process exist. The documents
-listed below are **reserved and intentionally not yet created**. Each will
-be added when the story that needs it is implemented, so that documentation
+As of STORY-001 (architecture & Python backend foundation), this index, the
+[Architecture Decision Records](adr/README.md) process, and
+[ARCHITECTURE.md](ARCHITECTURE.md) exist. The remaining documents listed
+below are **reserved and intentionally not yet created**. Each will be
+added when the story that needs it is implemented, so that documentation
 never describes functionality that doesn't exist yet.
 
 ## Planned Documents
@@ -17,7 +18,6 @@ never describes functionality that doesn't exist yet.
 | Document | Purpose |
 |---|---|
 | `PRODUCT.md` | Product vision, scope, and user-facing functionality |
-| `ARCHITECTURE.md` | System architecture, component boundaries, tech stack rationale |
 | `DOMAIN_MODEL.md` | Core domain entities and their relationships |
 | `DATABASE.md` | Schema design, migrations strategy, data lifecycle |
 | `API.md` | API surface, conventions, versioning |
