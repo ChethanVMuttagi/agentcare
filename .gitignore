@@ -1,0 +1,88 @@
+# =============================================================================
+# AgentCare .gitignore
+# Security-first: this repository is PUBLIC. Never commit secrets, credentials,
+# local databases, or real patient data. See SECURITY.md for policy details.
+# =============================================================================
+
+# --- Environment / secrets --------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# --- Alembic (keep migration scripts, ignore local sqlite artifacts only) ---
+# Note: alembic/versions/*.py MUST be committed; do not add a blanket ignore here.
+
+# --- Node / Next.js -----------------------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+.vercel/
+next-env.d.ts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnp/
+.pnp.js
+
+# --- IDE / OS ------------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+
+# --- Sensitive files -----------------------------------------------------------
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+credentials/
+secrets/
+
+# --- Local databases -------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Runtime / user files --------------------------------------------------------
+uploads/
+local_storage/
+tmp/
+logs/
+*.log
+
+# --- Docker (local overrides only; base compose/Dockerfiles are committed) -------
+docker-compose.override.yml
+
+# --- Misc ------------------------------------------------------------------------
+*.bak
+*.tmp
