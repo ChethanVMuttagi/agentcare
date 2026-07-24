@@ -1,12 +1,14 @@
 # AgentCare Architecture
 
-This document describes AgentCare's backend architecture as of STORY-002
-(PostgreSQL & Database Foundation), building on STORY-001 (Architecture &
-Python Backend Foundation). It clearly separates **CURRENT** (what exists
-in the repository today) from **PLANNED** (direction only — not
-implemented). See [README.md](../README.md) for the same distinction
-applied to the project as a whole, and [DATABASE.md](DATABASE.md) for the
-full database-layer detail this document only summarizes.
+This document describes AgentCare's backend architecture as of STORY-003
+(Organization & Facility Tenancy Foundation), building on STORY-002
+(PostgreSQL & Database Foundation) and STORY-001 (Architecture & Python
+Backend Foundation). It clearly separates **CURRENT** (what exists in the
+repository today) from **PLANNED** (direction only — not implemented).
+See [README.md](../README.md) for the same distinction applied to the
+project as a whole, [DATABASE.md](DATABASE.md) for the full
+database-layer detail, and [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the
+domain model itself — this document only summarizes both.
 
 ## 1. Architectural Principles
 
@@ -25,7 +27,7 @@ full database-layer detail this document only summarizes.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001 + STORY-002)
+## 2. Current Architecture (STORY-001 + STORY-002 + STORY-003)
 
 The backend is a single Python package (`backend/app/`) — a **modular
 monolith**, not yet split into services or layers beyond what's needed
@@ -44,9 +46,14 @@ backend/app/
 │   ├── logging.py        # Logging configuration
 │   └── exceptions.py     # AppException base + global exception handlers
 ├── db/
-│   ├── base.py            # Declarative Base for future ORM models
+│   ├── base.py            # Declarative Base (+ naming convention)
 │   ├── session.py         # Async engine/session lifecycle, get_db_session
-│   └── health.py          # Real SELECT 1 connectivity check
+│   ├── health.py          # Real SELECT 1 connectivity check
+│   ├── mixins.py          # UUIDPrimaryKeyMixin, TimestampMixin
+│   └── types.py           # enum_values() — shared Enum column helper
+├── models/
+│   ├── organization.py    # Organization, OrganizationType
+│   └── facility.py        # Facility, FacilityType
 └── schemas/
     └── common.py          # ErrorResponse, HealthResponse, ReadinessResponse
 ```
@@ -60,8 +67,8 @@ What exists today:
   independent app instances. A **lifespan** handler disposes the database
   engine's connection pool cleanly on shutdown.
 - A versioned API mounted under `/api/v1`, exposing health and readiness
-  endpoints — readiness now reflects real database connectivity (see
-  Section 6 and [DATABASE.md](DATABASE.md)).
+  endpoints — readiness reflects real database connectivity (see Section
+  6 and [DATABASE.md](DATABASE.md)).
 - Typed, environment-driven configuration (`Settings`), including
   `DATABASE_URL` (optional, `SecretStr`). LLM provider fields remain
   optional configuration only — no LLM integration exists yet.
@@ -69,25 +76,34 @@ What exists today:
   a lazily-created, cached engine (PostgreSQL via `asyncpg` in
   production), a session factory, and a `get_db_session()` FastAPI
   dependency that creates, yields, and closes a session without
-  auto-committing. No route consumes it yet — no domain data exists to
-  query.
+  auto-committing. No route consumes it yet — no service/repository layer
+  exists to call it (Section 3).
 - **A real database connectivity check** (`app/db/health.py`): an actual
   `SELECT 1`, never a faked result, wired into `/api/v1/ready`.
 - **Alembic migration infrastructure** (`backend/alembic.ini`,
-  `backend/migrations/`), configured to read `DATABASE_URL` from
-  `Settings` at runtime rather than embedding credentials, with
-  `target_metadata` pointed at `app.db.base.Base.metadata`. Zero
-  migrations exist — none are invented ahead of a real domain model.
+  `backend/migrations/`), reading `DATABASE_URL` from `Settings` at
+  runtime rather than embedding credentials, with `target_metadata`
+  pointed at `app.db.base.Base.metadata` via a clean `app.models` package
+  import (`migrations/env.py`). **One real migration exists**: it creates
+  the `organizations` and `facilities` tables — validated end-to-end
+  (upgrade, downgrade, re-upgrade) against real PostgreSQL.
+- **The first real domain models** (`app/models/organization.py`,
+  `app/models/facility.py` — STORY-003): `Organization` (AgentCare's
+  tenant boundary) and `Facility` (belongs to exactly one Organization).
+  See [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the full model, and
+  ADR-0003 for the tenancy decision. Nothing queries or writes these
+  tables yet outside of tests — there is no CRUD API, service, or
+  repository layer for them (Section 3).
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data.
 - A standardized error response shape and global exception handling that
-  never leaks stack traces or internal detail to clients — this now also
+  never leaks stack traces or internal detail to clients — this also
   covers database errors (never exposing connection strings or driver
   exception text via the API).
 
-What does **not** exist yet: any domain model, any table, any repository
-or service layer, any LLM call, any agent, any authentication, any
-frontend.
+What does **not** exist yet: any repository or service layer, any entity
+beyond `Organization`/`Facility`, any CRUD API for those entities, any
+LLM call, any agent, any authentication, any frontend.
 
 ## 3. Planned Architecture (NOT Implemented)
 
@@ -97,11 +113,17 @@ Everything in this section is direction, not current behavior.
   business rules so route handlers stay thin.
 - **A repository layer** encapsulating database access behind an
   interface (built on top of the `app/db/` session foundation from
-  STORY-002), so services (and, indirectly, agents) don't issue raw
-  queries.
-- **Healthcare domain models** (patients, appointments, referrals, etc.),
-  as SQLAlchemy 2.x `Mapped[...]` classes subclassing `app.db.base.Base`,
-  and their first Alembic migration.
+  STORY-002 and the `Organization`/`Facility` models from STORY-003), so
+  services (and, indirectly, agents) don't issue raw queries.
+- **Further healthcare domain models** below the tenant hierarchy
+  (patients, appointments, referrals, staff, documents, etc.), as
+  SQLAlchemy 2.x `Mapped[...]` classes subclassing `app.db.base.Base` —
+  `Organization`/`Facility` (STORY-003) are the first, not the last; see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 12.
+- **A CRUD API, service, and/or repository layer for `Organization` and
+  `Facility` themselves** — STORY-003 established persistence only.
+- **Tenant-access enforcement** (repository/service/auth-context level —
+  see ADR-0003) once authentication exists.
 - **LangGraph-based agent workflows** for coordination tasks (scheduling,
   intake, referrals, follow-ups), invoked through the service layer.
 - **An LLM provider abstraction** so agents/workflows are not hardcoded to
@@ -229,18 +251,33 @@ tools will simply not expose clinical-decision capabilities.
   all four `Environment` values, plus a dedicated test confirming
   `/api/v1/health` stays 200 in every environment regardless of database
   state.
+- Coverage added in STORY-003: the `Organization`/`Facility` domain model
+  suite (`backend/tests/models/`) runs exclusively against real
+  PostgreSQL (not SQLite), each test isolated by a rolled-back savepoint
+  — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 10 for what's covered
+  and why SQLite isn't used here.
 - Test values (e.g. a JWT secret used only to test that `SecretStr` masking
-  works) are synthetic and clearly non-production.
+  works, or synthetic organization/facility names) are synthetic and
+  clearly non-production.
 - As services, repositories, and workflows are introduced, this section
   will describe how unit, integration, and end-to-end layers divide.
 
-## 10. Multi-Tenancy Direction (Planned)
+## 10. Multi-Tenancy Direction
 
-Not implemented. AgentCare is expected to eventually serve
-multiple healthcare organizations. The specific isolation strategy (e.g.
-row-level tenant scoping vs. schema-per-tenant) is an open architectural
-question to be resolved via an ADR before the domain model is implemented,
-not assumed here.
+**Decided (STORY-003, ADR-0003)**: `Organization` is AgentCare's tenant
+boundary; `Facility` belongs to exactly one Organization via a required
+FK. Every future tenant-owned entity is expected to carry
+`organization_id`, directly or through an explicit ownership path. See
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 5 and ADR-0003 for the full
+decision, including what is deliberately **not** yet enforced.
+
+**Still planned**: there is no global, automatic tenant-access filter at
+the query level, and none is assumed. That enforcement is deferred,
+deliberately, to a future repository/service/auth-context layer — not
+implicitly relied upon, not silently skipped. Row-level security and a
+schema-per-tenant/database-per-tenant alternative were both considered
+and deferred (not rejected) in ADR-0003, pending the authentication
+design they'd depend on.
 
 ## 11. Observability Direction (Planned)
 

@@ -37,8 +37,9 @@ or agent workflows exist.
 - Contribution guidelines ([CONTRIBUTING.md](CONTRIBUTING.md))
 - Documentation foundation ([docs/README.md](docs/README.md)),
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-  [docs/DATABASE.md](docs/DATABASE.md), and the Architecture Decision
-  Record process ([docs/adr/](docs/adr/README.md))
+  [docs/DATABASE.md](docs/DATABASE.md),
+  [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md), and the Architecture
+  Decision Record process ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
 - **FastAPI backend application foundation** (`backend/app/`): an
   application factory with lifespan-managed resource cleanup, versioned
@@ -51,15 +52,26 @@ or agent workflows exist.
   production), a real database connectivity check wired into
   `/api/v1/ready`, and Alembic migration infrastructure
   (`backend/alembic.ini`, `backend/migrations/`) — configured and
-  credential-free, with zero migrations yet since no domain model exists
-- Backend test suite (`backend/tests/`) exercising the real FastAPI app
-  and real (SQLite-backed, for isolation) database behavior
+  credential-free
+- **Organization & Facility tenancy foundation** (`backend/app/models/`):
+  AgentCare's first real domain models — `Organization` (the tenant
+  boundary) and `Facility` (belongs to one organization) — with UUID
+  primary keys, enum-backed types enforced by real database `CHECK`
+  constraints, a composite uniqueness constraint, and a foreign key with
+  safe (`RESTRICT`) delete semantics. Backed by AgentCare's first real
+  Alembic migration, applied to and validated against real PostgreSQL.
+  See [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md). No CRUD API,
+  service, or repository layer exists for them yet.
+- Backend test suite (`backend/tests/`) exercising the real FastAPI app,
+  real (SQLite-backed, for isolation) infrastructure-level database
+  behavior, and the `Organization`/`Facility` models against real
+  PostgreSQL
 
 **Not yet implemented** (planned, across future stories):
-- Domain models (patients, appointments, referrals, etc.) and their first
-  Alembic migration
-- A service/repository layer between API routes and the database
-- Authentication and RBAC
+- A CRUD API, service, and repository layer for `Organization`/`Facility`
+- Further domain models below the tenant hierarchy (patients,
+  appointments, referrals, staff, documents, etc.)
+- Authentication and RBAC, including tenant-access enforcement
 - LangGraph-based agent workflows
 - LLM provider abstraction (Groq / OpenAI / Anthropic)
 - Next.js frontend
@@ -105,17 +117,19 @@ recommendation, or any function that constitutes the practice of medicine.
 |---|---|---|
 | Backend API | Python, FastAPI | Implemented |
 | Configuration | Pydantic Settings | Implemented |
-| Database | PostgreSQL | Implemented (infrastructure — no domain data yet) |
-| ORM | SQLAlchemy 2.x | Implemented (infrastructure — no models yet) |
-| Migrations | Alembic | Implemented (infrastructure — zero migrations yet) |
+| Database | PostgreSQL | Implemented (2 tenancy tables — see below) |
+| ORM | SQLAlchemy 2.x | Implemented (`Organization`, `Facility` models) |
+| Migrations | Alembic | Implemented (1 migration, validated against real PostgreSQL) |
 | Agent Orchestration | LangGraph | Planned |
 | LLM Access | Provider-abstracted (Groq / OpenAI / Anthropic) | Planned |
 | Frontend | Next.js | Planned |
 | Containerization | Docker | Planned |
 
-"Implemented (infrastructure)" means the engine/session/migration
-plumbing exists and is tested, but no healthcare domain model or table
-exists yet — see [docs/DATABASE.md](docs/DATABASE.md).
+The database layer is implemented and tested, but scoped narrowly:
+`organizations` and `facilities` are the only tables that exist, there is
+no CRUD API for them, and no further healthcare domain model (patients,
+appointments, etc.) exists yet — see
+[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md).
 
 ## Repository Structure
 
@@ -127,8 +141,9 @@ agentcare/
 │   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready)
 │   │   ├── core/         # Settings, logging, exceptions
 │   │   ├── db/            # Async SQLAlchemy engine/session, DB health check
+│   │   ├── models/         # Organization, Facility (domain persistence)
 │   │   └── schemas/      # Shared Pydantic schemas (errors, health)
-│   ├── migrations/        # Alembic migrations (infrastructure; 0 migrations yet)
+│   ├── migrations/        # Alembic migrations (1: organizations + facilities)
 │   ├── alembic.ini
 │   ├── tests/            # Backend test suite
 │   └── pyproject.toml    # Backend dependencies + tool configuration
@@ -136,6 +151,7 @@ agentcare/
 ├── docs/                # Project documentation, see docs/README.md
 │   ├── ARCHITECTURE.md   # Current + planned backend architecture
 │   ├── DATABASE.md        # Database foundation: engine, sessions, migrations
+│   ├── DOMAIN_MODEL.md    # Organization/Facility model, tenant hierarchy
 │   └── adr/              # Architecture Decision Records
 ├── infrastructure/      # Deployment/infra config (not yet implemented)
 ├── scripts/             # Developer/operational scripts (not yet implemented)
@@ -187,15 +203,18 @@ DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentca
 Then, from `backend/`:
 
 ```powershell
-alembic upgrade head              # apply all pending migrations (none exist yet)
-alembic revision --autogenerate -m "add <thing>"   # once a domain model exists
+alembic upgrade head              # apply all pending migrations
+alembic revision --autogenerate -m "add <thing>"
 alembic current                   # show current DB revision
 ```
 
-No domain tables exist yet, so there is nothing to migrate today — see
+`alembic upgrade head` creates the `organizations` and `facilities`
+tables (AgentCare's tenant hierarchy — see
+[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md)). See
 [docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow and
-testing strategy (SQLite is used only for isolated automated tests;
-PostgreSQL remains the production database).
+testing strategy (SQLite is used only for isolated infrastructure-level
+tests; PostgreSQL remains the production database and is what the
+`Organization`/`Facility` test suite runs against).
 
 Run the test suite and quality checks from `backend/`:
 

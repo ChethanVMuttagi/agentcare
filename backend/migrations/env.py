@@ -6,17 +6,9 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from app import models  # noqa: F401  (registers all model metadata on Base.metadata)
 from app.core.config import get_settings
 from app.db.base import Base
-
-# --- Future model modules -------------------------------------------------
-# No domain model modules exist yet (this migration environment was set up
-# by STORY-002, which is database infrastructure only). When a future
-# story adds one (e.g. `app/models/patient.py`), import it here so its
-# table metadata is registered on `Base.metadata` before autogenerate runs:
-#
-#   from app.models import patient  # noqa: F401
-# ---------------------------------------------------------------------------
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -28,7 +20,10 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Metadata for 'autogenerate' support — the application's single
-# declarative base. See the "Future model modules" comment above.
+# declarative base. Importing `app.models` above (which imports every
+# model module) is what actually registers each model's table on this
+# metadata; new model modules only need to be added to
+# `app/models/__init__.py`, not here.
 target_metadata = Base.metadata
 
 
