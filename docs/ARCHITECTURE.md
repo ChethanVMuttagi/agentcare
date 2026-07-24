@@ -1,10 +1,12 @@
 # AgentCare Architecture
 
-This document describes AgentCare's backend architecture as of STORY-001
-(Architecture & Python Backend Foundation). It clearly separates **CURRENT**
-(what exists in the repository today) from **PLANNED** (direction only —
-not implemented). See [README.md](../README.md) for the same distinction
-applied to the project as a whole.
+This document describes AgentCare's backend architecture as of STORY-002
+(PostgreSQL & Database Foundation), building on STORY-001 (Architecture &
+Python Backend Foundation). It clearly separates **CURRENT** (what exists
+in the repository today) from **PLANNED** (direction only — not
+implemented). See [README.md](../README.md) for the same distinction
+applied to the project as a whole, and [DATABASE.md](DATABASE.md) for the
+full database-layer detail this document only summarizes.
 
 ## 1. Architectural Principles
 
@@ -23,7 +25,7 @@ applied to the project as a whole.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001)
+## 2. Current Architecture (STORY-001 + STORY-002)
 
 The backend is a single Python package (`backend/app/`) — a **modular
 monolith**, not yet split into services or layers beyond what's needed
@@ -32,6 +34,7 @@ today:
 ```
 backend/app/
 ├── main.py              # Application factory: create_app() -> FastAPI
+│                         # + lifespan (disposes the DB engine on shutdown)
 ├── api/v1/
 │   ├── router.py         # Aggregates versioned API routes
 │   └── endpoints/
@@ -40,37 +43,65 @@ backend/app/
 │   ├── config.py         # Settings (pydantic-settings), Environment enum
 │   ├── logging.py        # Logging configuration
 │   └── exceptions.py     # AppException base + global exception handlers
+├── db/
+│   ├── base.py            # Declarative Base for future ORM models
+│   ├── session.py         # Async engine/session lifecycle, get_db_session
+│   └── health.py          # Real SELECT 1 connectivity check
 └── schemas/
     └── common.py          # ErrorResponse, HealthResponse, ReadinessResponse
 ```
 
+Plus, under `backend/` alongside `app/`: `alembic.ini` and `migrations/`
+(Alembic migration infrastructure — see [DATABASE.md](DATABASE.md)).
+
 What exists today:
 - A FastAPI application built via an **application factory**
   (`create_app()`), not constructed at import time, so tests can create
-  independent app instances and future startup logic has a clean place to
-  live.
-- A versioned API mounted under `/api/v1`, currently exposing only health
-  and readiness endpoints.
-- Typed, environment-driven configuration (`Settings`), with no database or
-  LLM integration — those fields exist as optional configuration only.
+  independent app instances. A **lifespan** handler disposes the database
+  engine's connection pool cleanly on shutdown.
+- A versioned API mounted under `/api/v1`, exposing health and readiness
+  endpoints — readiness now reflects real database connectivity (see
+  Section 6 and [DATABASE.md](DATABASE.md)).
+- Typed, environment-driven configuration (`Settings`), including
+  `DATABASE_URL` (optional, `SecretStr`). LLM provider fields remain
+  optional configuration only — no LLM integration exists yet.
+- **Async SQLAlchemy 2.x engine/session management** (`app/db/session.py`):
+  a lazily-created, cached engine (PostgreSQL via `asyncpg` in
+  production), a session factory, and a `get_db_session()` FastAPI
+  dependency that creates, yields, and closes a session without
+  auto-committing. No route consumes it yet — no domain data exists to
+  query.
+- **A real database connectivity check** (`app/db/health.py`): an actual
+  `SELECT 1`, never a faked result, wired into `/api/v1/ready`.
+- **Alembic migration infrastructure** (`backend/alembic.ini`,
+  `backend/migrations/`), configured to read `DATABASE_URL` from
+  `Settings` at runtime rather than embedding credentials, with
+  `target_metadata` pointed at `app.db.base.Base.metadata`. Zero
+  migrations exist — none are invented ahead of a real domain model.
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data.
 - A standardized error response shape and global exception handling that
-  never leaks stack traces or internal detail to clients.
+  never leaks stack traces or internal detail to clients — this now also
+  covers database errors (never exposing connection strings or driver
+  exception text via the API).
 
-What does **not** exist yet: any domain model, any database connection, any
-LLM call, any agent, any authentication, any frontend.
+What does **not** exist yet: any domain model, any table, any repository
+or service layer, any LLM call, any agent, any authentication, any
+frontend.
 
 ## 3. Planned Architecture (NOT Implemented)
 
 Everything in this section is direction, not current behavior.
 
-- **PostgreSQL** as the system of record, accessed via SQLAlchemy 2.x
-  models and versioned with Alembic migrations.
 - **A service layer** between API routes and data access, encapsulating
   business rules so route handlers stay thin.
 - **A repository layer** encapsulating database access behind an
-  interface, so services (and, indirectly, agents) don't issue raw queries.
+  interface (built on top of the `app/db/` session foundation from
+  STORY-002), so services (and, indirectly, agents) don't issue raw
+  queries.
+- **Healthcare domain models** (patients, appointments, referrals, etc.),
+  as SQLAlchemy 2.x `Mapped[...]` classes subclassing `app.db.base.Base`,
+  and their first Alembic migration.
 - **LangGraph-based agent workflows** for coordination tasks (scheduling,
   intake, referrals, follow-ups), invoked through the service layer.
 - **An LLM provider abstraction** so agents/workflows are not hardcoded to
@@ -120,12 +151,29 @@ structural, not just a convention:
 
 - Secrets are never hardcoded and never logged (see
   [SECURITY.md](../SECURITY.md) and `app/core/logging.py`). Settings fields
-  that hold credentials use Pydantic's `SecretStr`, which masks the value
-  in `repr()`/`str()` output.
+  that hold credentials — including `DATABASE_URL` — use Pydantic's
+  `SecretStr`, which masks the value in `repr()`/`str()` output.
 - The application must be able to start, and pass health checks, **without**
-  any LLM API key or database connection configured — those are optional at
-  the configuration layer in STORY-001 because no integration exists yet
-  that needs them.
+  any LLM API key or database connection configured. `DATABASE_URL` is
+  optional at the configuration layer in every environment, and the real
+  database connectivity check (`app/db/health.py`) is only invoked when
+  it's set. LLM provider fields remain optional/unused since no LLM
+  integration exists yet.
+- **Readiness is production-safety-aware, not just database-aware**: an
+  unconfigured database is acceptable in `development`/`test` (the app
+  must run without one there), but makes `/api/v1/ready` report
+  `not_ready`/503 in `staging`/`production` — an operator who forgets to
+  configure `DATABASE_URL` in a real deployment gets a hard failure
+  signal, not a silently-passing readiness probe. This policy lives in
+  exactly one place, `_is_check_acceptable()` in
+  `app/api/v1/endpoints/health.py`, using the existing typed `Environment`
+  enum — not scattered string comparisons. See
+  [DATABASE.md](DATABASE.md) Section 7 for the full table and rationale.
+- The database connectivity check never raises and never forwards driver
+  exception detail (which can include host/port information) to its
+  caller — connection failures are logged server-side only, and the
+  `/api/v1/ready` response exposes only an enum-like status, never
+  `DATABASE_URL`, credentials, or stack traces, in any environment.
 - `APP_ENV=production` combined with `DEBUG=true` is rejected at startup by
   a settings validator, rather than silently allowed — production must not
   accidentally run in debug mode.
@@ -152,10 +200,13 @@ tools will simply not expose clinical-decision capabilities.
 - `Environment` is a closed enum (`development`, `test`, `staging`,
   `production`) so environment-dependent behavior is checked against a
   known type rather than compared as loose strings throughout the codebase.
-- Fields that don't yet have a real integration (database, LLM providers,
-  JWT signing) are optional, so the app can start for tests and health
-  checks without them. They will become required, per-environment, once the
-  corresponding integration is built.
+- Fields that don't yet have a real integration (LLM providers, JWT
+  signing) — and `DATABASE_URL`, which has a real integration
+  (STORY-002) but is still optional at the configuration layer — let the
+  app start for tests and health checks without them. `DATABASE_URL`
+  becomes operationally required only in environments that actually need
+  the database (not enforced by `Settings` itself; see
+  [DATABASE.md](DATABASE.md) Section 10).
 - `get_settings()` is cached (`lru_cache`) and used as a FastAPI dependency,
   so settings are read once per process rather than re-parsed per request.
 
@@ -167,6 +218,17 @@ tools will simply not expose clinical-decision capabilities.
   endpoint responses and schema, configuration defaults and validation
   (including the production/debug safety rule), and the standardized error
   shape for an unhandled route.
+- Coverage added in STORY-002: engine/session lifecycle and the database
+  connectivity check, exercised against a real (if non-production) SQLite
+  database rather than mocked — see [DATABASE.md](DATABASE.md) Sections
+  11–12 for what this does and doesn't prove; readiness-endpoint behavior
+  across database states (`ok`/`unavailable`/`not_configured`) via FastAPI
+  dependency overrides; that the readiness response never leaks
+  connection details; and, per the production-readiness-safety
+  correction, `not_configured`/`ok`/`unavailable` each parametrized across
+  all four `Environment` values, plus a dedicated test confirming
+  `/api/v1/health` stays 200 in every environment regardless of database
+  state.
 - Test values (e.g. a JWT secret used only to test that `SecretStr` masking
   works) are synthetic and clearly non-production.
 - As services, repositories, and workflows are introduced, this section
@@ -174,7 +236,7 @@ tools will simply not expose clinical-decision capabilities.
 
 ## 10. Multi-Tenancy Direction (Planned)
 
-Not implemented in STORY-001. AgentCare is expected to eventually serve
+Not implemented. AgentCare is expected to eventually serve
 multiple healthcare organizations. The specific isolation strategy (e.g.
 row-level tenant scoping vs. schema-per-tenant) is an open architectural
 question to be resolved via an ADR before the domain model is implemented,

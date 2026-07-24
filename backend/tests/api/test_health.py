@@ -17,12 +17,13 @@ def test_health_returns_ok(client: TestClient) -> None:
     }
 
 
-def test_readiness_returns_ok_with_no_faked_dependencies(client: TestClient) -> None:
+def test_readiness_is_ready_when_no_database_is_configured(client: TestClient) -> None:
+    # The default test environment has no DATABASE_URL configured. That
+    # must not fail readiness (see docs/DATABASE.md) or fake a connection
+    # — it must be truthfully reported as "not_configured".
     response = client.get("/api/v1/ready")
     assert response.status_code == 200
 
     body = response.json()
-    assert body["status"] == "ok"
-    # No database or external dependency is wired up yet in STORY-001, so
-    # readiness must not claim one is healthy.
-    assert body["checks"] == []
+    assert body["status"] == "ready"
+    assert body["checks"] == [{"name": "database", "status": "not_configured"}]

@@ -36,20 +36,29 @@ or agent workflows exist.
 - Security policy ([SECURITY.md](SECURITY.md))
 - Contribution guidelines ([CONTRIBUTING.md](CONTRIBUTING.md))
 - Documentation foundation ([docs/README.md](docs/README.md)),
-  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and the Architecture
-  Decision Record process ([docs/adr/](docs/adr/README.md))
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+  [docs/DATABASE.md](docs/DATABASE.md), and the Architecture Decision
+  Record process ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
 - **FastAPI backend application foundation** (`backend/app/`): an
-  application factory, versioned API routing under `/api/v1`, health and
-  readiness endpoints, typed environment-based configuration
-  (`pydantic-settings`), a structured logging foundation, and a
-  standardized API error/exception-handling architecture
+  application factory with lifespan-managed resource cleanup, versioned
+  API routing under `/api/v1`, health and readiness endpoints, typed
+  environment-based configuration (`pydantic-settings`), a structured
+  logging foundation, and a standardized API error/exception-handling
+  architecture
+- **PostgreSQL & database foundation** (`backend/app/db/`): async
+  SQLAlchemy 2.x engine/session lifecycle (PostgreSQL via `asyncpg` in
+  production), a real database connectivity check wired into
+  `/api/v1/ready`, and Alembic migration infrastructure
+  (`backend/alembic.ini`, `backend/migrations/`) — configured and
+  credential-free, with zero migrations yet since no domain model exists
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app
+  and real (SQLite-backed, for isolation) database behavior
 
 **Not yet implemented** (planned, across future stories):
-- PostgreSQL schema and SQLAlchemy 2.x models
-- Alembic migrations
-- Domain models (patients, appointments, referrals, etc.)
+- Domain models (patients, appointments, referrals, etc.) and their first
+  Alembic migration
+- A service/repository layer between API routes and the database
 - Authentication and RBAC
 - LangGraph-based agent workflows
 - LLM provider abstraction (Groq / OpenAI / Anthropic)
@@ -90,22 +99,23 @@ AgentCare's intended scope covers workflows such as:
 It explicitly does **not** cover clinical diagnosis, treatment
 recommendation, or any function that constitutes the practice of medicine.
 
-## Planned Technology Stack (High-Level)
+## Technology Stack
 
-| Layer | Planned Technology |
-|---|---|
-| Backend API | Python, FastAPI |
-| Database | PostgreSQL |
-| ORM | SQLAlchemy 2.x |
-| Migrations | Alembic |
-| Configuration | Pydantic Settings |
-| Agent Orchestration | LangGraph |
-| LLM Access | Provider-abstracted (Groq / OpenAI / Anthropic) |
-| Frontend | Next.js |
-| Containerization | Docker |
+| Layer | Technology | Status |
+|---|---|---|
+| Backend API | Python, FastAPI | Implemented |
+| Configuration | Pydantic Settings | Implemented |
+| Database | PostgreSQL | Implemented (infrastructure — no domain data yet) |
+| ORM | SQLAlchemy 2.x | Implemented (infrastructure — no models yet) |
+| Migrations | Alembic | Implemented (infrastructure — zero migrations yet) |
+| Agent Orchestration | LangGraph | Planned |
+| LLM Access | Provider-abstracted (Groq / OpenAI / Anthropic) | Planned |
+| Frontend | Next.js | Planned |
+| Containerization | Docker | Planned |
 
-None of the above is installed or implemented yet — this table describes
-direction, not current state.
+"Implemented (infrastructure)" means the engine/session/migration
+plumbing exists and is tested, but no healthcare domain model or table
+exists yet — see [docs/DATABASE.md](docs/DATABASE.md).
 
 ## Repository Structure
 
@@ -113,15 +123,19 @@ direction, not current state.
 agentcare/
 ├── backend/             # FastAPI application foundation
 │   ├── app/
-│   │   ├── main.py       # Application factory: create_app() -> FastAPI
+│   │   ├── main.py       # Application factory (+ lifespan): create_app()
 │   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready)
 │   │   ├── core/         # Settings, logging, exceptions
+│   │   ├── db/            # Async SQLAlchemy engine/session, DB health check
 │   │   └── schemas/      # Shared Pydantic schemas (errors, health)
+│   ├── migrations/        # Alembic migrations (infrastructure; 0 migrations yet)
+│   ├── alembic.ini
 │   ├── tests/            # Backend test suite
 │   └── pyproject.toml    # Backend dependencies + tool configuration
 ├── frontend/            # Next.js application (not yet implemented)
 ├── docs/                # Project documentation, see docs/README.md
 │   ├── ARCHITECTURE.md   # Current + planned backend architecture
+│   ├── DATABASE.md        # Database foundation: engine, sessions, migrations
 │   └── adr/              # Architecture Decision Records
 ├── infrastructure/      # Deployment/infra config (not yet implemented)
 ├── scripts/             # Developer/operational scripts (not yet implemented)
@@ -150,12 +164,38 @@ copy ..\.env.example .env    # creates backend\.env; then edit it with your own 
 uvicorn app.main:app --reload
 ```
 
-The app starts without any database or LLM credentials configured — none
-are integrated yet in this story. Once running:
+The app starts, and its test suite runs, without any database or LLM
+credentials configured — `DATABASE_URL` is optional for local development
+and testing. In `staging`/`production`, however, an unconfigured database
+makes `/api/v1/ready` report `not_ready` (HTTP 503) rather than silently
+passing — see [docs/DATABASE.md](docs/DATABASE.md) for the full
+per-environment readiness semantics. Once running:
 
 - Health: `http://127.0.0.1:8000/api/v1/health`
 - Readiness: `http://127.0.0.1:8000/api/v1/ready`
 - Interactive API docs: `http://127.0.0.1:8000/docs`
+
+### Database (PostgreSQL, optional for most local work)
+
+Set `DATABASE_URL` in `backend/.env` to a real PostgreSQL instance (using
+the async `asyncpg` driver scheme) to exercise the database layer:
+
+```
+DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentcare_dev
+```
+
+Then, from `backend/`:
+
+```powershell
+alembic upgrade head              # apply all pending migrations (none exist yet)
+alembic revision --autogenerate -m "add <thing>"   # once a domain model exists
+alembic current                   # show current DB revision
+```
+
+No domain tables exist yet, so there is nothing to migrate today — see
+[docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow and
+testing strategy (SQLite is used only for isolated automated tests;
+PostgreSQL remains the production database).
 
 Run the test suite and quality checks from `backend/`:
 

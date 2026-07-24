@@ -6,12 +6,13 @@ documentation is not backfilled after the fact.
 
 ## Status
 
-As of STORY-001 (architecture & Python backend foundation), this index, the
-[Architecture Decision Records](adr/README.md) process, and
-[ARCHITECTURE.md](ARCHITECTURE.md) exist. The remaining documents listed
-below are **reserved and intentionally not yet created**. Each will be
-added when the story that needs it is implemented, so that documentation
-never describes functionality that doesn't exist yet.
+As of STORY-002 (PostgreSQL & database foundation), this index, the
+[Architecture Decision Records](adr/README.md) process,
+[ARCHITECTURE.md](ARCHITECTURE.md), and [DATABASE.md](DATABASE.md) exist.
+The remaining documents listed below are **reserved and intentionally not
+yet created**. Each will be added when the story that needs it is
+implemented, so that documentation never describes functionality that
+doesn't exist yet.
 
 ## Planned Documents
 
@@ -19,7 +20,6 @@ never describes functionality that doesn't exist yet.
 |---|---|
 | `PRODUCT.md` | Product vision, scope, and user-facing functionality |
 | `DOMAIN_MODEL.md` | Core domain entities and their relationships |
-| `DATABASE.md` | Schema design, migrations strategy, data lifecycle |
 | `API.md` | API surface, conventions, versioning |
 | `AGENTS.md` | Agentic AI components: roles, responsibilities, boundaries |
 | `TOOLS.md` | Tools exposed to agents and how they're governed |
