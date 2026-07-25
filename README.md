@@ -38,8 +38,9 @@ or agent workflows exist.
 - Documentation foundation ([docs/README.md](docs/README.md)),
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   [docs/DATABASE.md](docs/DATABASE.md),
-  [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md), and the Architecture
-  Decision Record process ([docs/adr/](docs/adr/README.md))
+  [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md),
+  [docs/RBAC.md](docs/RBAC.md), and the Architecture Decision Record
+  process ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
 - **FastAPI backend application foundation** (`backend/app/`): an
   application factory with lifespan-managed resource cleanup, versioned
@@ -62,16 +63,34 @@ or agent workflows exist.
   Alembic migration, applied to and validated against real PostgreSQL.
   See [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md). No CRUD API,
   service, or repository layer exists for them yet.
+- **Identity, membership & RBAC foundation** (`backend/app/models/user.py`,
+  `backend/app/models/membership.py`, `backend/app/auth/`): a global
+  `User` identity (Argon2id-hashed passwords), `OrganizationMembership`
+  (a user's `Role` — `admin`/`staff`/`patient` — within one organization,
+  `UNIQUE(organization_id, user_id)`), stateless JWT access tokens
+  (`sub`/`iat`/`exp`/`jti` only — never role, email, or medical data), and
+  backend-enforced authorization dependencies (`get_current_user`,
+  `get_current_membership`, `require_roles`) that always re-resolve
+  membership/role from the database, never from the token. A minimal auth
+  API exists: `POST /api/v1/auth/token`, `GET /api/v1/auth/me`. Backed by
+  AgentCare's second Alembic migration, applied to and validated against
+  real PostgreSQL. See [docs/RBAC.md](docs/RBAC.md). No organization-scoped
+  route uses these dependencies yet — no such route exists.
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app,
   real (SQLite-backed, for isolation) infrastructure-level database
-  behavior, and the `Organization`/`Facility` models against real
-  PostgreSQL
+  behavior, and the `Organization`/`Facility`/`User`/`OrganizationMembership`
+  models, password hashing, JWT handling, and the auth API end-to-end
+  against real PostgreSQL
 
 **Not yet implemented** (planned, across future stories):
 - A CRUD API, service, and repository layer for `Organization`/`Facility`
 - Further domain models below the tenant hierarchy (patients,
-  appointments, referrals, staff, documents, etc.)
-- Authentication and RBAC, including tenant-access enforcement
+  appointments, referrals, staff, documents, etc.), including patient
+  self-access authorization rules
+- Any organization-scoped route that actually depends on
+  `get_current_membership`/`require_roles`; finer-grained permissions
+  beyond `Role`; refresh tokens; token revocation; password reset; email
+  verification; MFA; OAuth/social login; public user registration
 - LangGraph-based agent workflows
 - LLM provider abstraction (Groq / OpenAI / Anthropic)
 - Next.js frontend
@@ -117,19 +136,23 @@ recommendation, or any function that constitutes the practice of medicine.
 |---|---|---|
 | Backend API | Python, FastAPI | Implemented |
 | Configuration | Pydantic Settings | Implemented |
-| Database | PostgreSQL | Implemented (2 tenancy tables — see below) |
-| ORM | SQLAlchemy 2.x | Implemented (`Organization`, `Facility` models) |
-| Migrations | Alembic | Implemented (1 migration, validated against real PostgreSQL) |
+| Database | PostgreSQL | Implemented (4 tables — see below) |
+| ORM | SQLAlchemy 2.x | Implemented (`Organization`, `Facility`, `User`, `OrganizationMembership`) |
+| Migrations | Alembic | Implemented (2 migrations, validated against real PostgreSQL) |
+| Authentication | Argon2id password hashing + JWT (PyJWT) | Implemented (`POST /auth/token`, `GET /auth/me`) |
+| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented (primitives only — not yet wired to any route) |
 | Agent Orchestration | LangGraph | Planned |
 | LLM Access | Provider-abstracted (Groq / OpenAI / Anthropic) | Planned |
 | Frontend | Next.js | Planned |
 | Containerization | Docker | Planned |
 
 The database layer is implemented and tested, but scoped narrowly:
-`organizations` and `facilities` are the only tables that exist, there is
-no CRUD API for them, and no further healthcare domain model (patients,
-appointments, etc.) exists yet — see
-[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md).
+`organizations`, `facilities`, `users`, and `organization_memberships`
+are the only tables that exist, there is no CRUD API for
+`Organization`/`Facility`, and no further healthcare domain model
+(patients, appointments, etc.) exists yet — see
+[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) and
+[docs/RBAC.md](docs/RBAC.md).
 
 ## Repository Structure
 
@@ -138,12 +161,13 @@ agentcare/
 ├── backend/             # FastAPI application foundation
 │   ├── app/
 │   │   ├── main.py       # Application factory (+ lifespan): create_app()
-│   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready)
+│   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready/auth)
+│   │   ├── auth/          # Password hashing, JWT, auth service, auth dependencies
 │   │   ├── core/         # Settings, logging, exceptions
 │   │   ├── db/            # Async SQLAlchemy engine/session, DB health check
-│   │   ├── models/         # Organization, Facility (domain persistence)
-│   │   └── schemas/      # Shared Pydantic schemas (errors, health)
-│   ├── migrations/        # Alembic migrations (1: organizations + facilities)
+│   │   ├── models/         # Organization, Facility, User, OrganizationMembership
+│   │   └── schemas/      # Shared Pydantic schemas (errors, health, auth)
+│   ├── migrations/        # Alembic migrations (organizations+facilities; users+memberships)
 │   ├── alembic.ini
 │   ├── tests/            # Backend test suite
 │   └── pyproject.toml    # Backend dependencies + tool configuration
@@ -151,7 +175,8 @@ agentcare/
 ├── docs/                # Project documentation, see docs/README.md
 │   ├── ARCHITECTURE.md   # Current + planned backend architecture
 │   ├── DATABASE.md        # Database foundation: engine, sessions, migrations
-│   ├── DOMAIN_MODEL.md    # Organization/Facility model, tenant hierarchy
+│   ├── DOMAIN_MODEL.md    # Domain model, tenant hierarchy, identity
+│   ├── RBAC.md            # Identity, authentication, authorization model
 │   └── adr/              # Architecture Decision Records
 ├── infrastructure/      # Deployment/infra config (not yet implemented)
 ├── scripts/             # Developer/operational scripts (not yet implemented)
@@ -208,13 +233,15 @@ alembic revision --autogenerate -m "add <thing>"
 alembic current                   # show current DB revision
 ```
 
-`alembic upgrade head` creates the `organizations` and `facilities`
-tables (AgentCare's tenant hierarchy — see
-[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md)). See
-[docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow and
-testing strategy (SQLite is used only for isolated infrastructure-level
-tests; PostgreSQL remains the production database and is what the
-`Organization`/`Facility` test suite runs against).
+`alembic upgrade head` creates the `organizations`/`facilities` tables
+(AgentCare's tenant hierarchy) and the `users`/`organization_memberships`
+tables (identity and role-based membership — see
+[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) and
+[docs/RBAC.md](docs/RBAC.md)). See [docs/DATABASE.md](docs/DATABASE.md)
+for the full migration workflow and testing strategy (SQLite is used only
+for isolated infrastructure-level tests; PostgreSQL remains the
+production database and is what the domain model and auth test suites run
+against).
 
 Run the test suite and quality checks from `backend/`:
 

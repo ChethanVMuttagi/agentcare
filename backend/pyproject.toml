@@ -16,6 +16,12 @@ dependencies = [
     # minimal Linux/container images lack one too — depend on this
     # explicitly rather than assume the platform provides it.
     "tzdata>=2024.1",
+    # Password hashing (Argon2id) and JWT — see app/auth/. Never implement
+    # either primitive by hand.
+    "argon2-cffi>=23.1,<24.0",
+    "pyjwt>=2.9,<3.0",
+    # Required for pydantic's EmailStr, used by the login request schema.
+    "email-validator>=2.2,<3.0",
 ]
 
 [project.optional-dependencies]

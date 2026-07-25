@@ -39,7 +39,7 @@ statement that AgentCare is not a diagnosis or treatment system.
 - Secrets are scoped to the narrowest environment that needs them (e.g., a
   `staging` secret is not also exposed to a `demo` workflow unless required).
 - Secrets are rotated whenever a contributor with access leaves the project
-  or whenever exposure is suspected (see Section 10).
+  or whenever exposure is suspected (see Section 11).
 
 ## 4. API Key Handling
 
@@ -61,7 +61,29 @@ statement that AgentCare is not a diagnosis or treatment system.
   platform's secret store and are never shared over chat, email, or
   committed anywhere.
 
-## 6. No Real Patient Data
+## 6. Password & Authentication Token Handling
+
+- Passwords are hashed with Argon2id (`argon2-cffi`) before storage —
+  never with a hand-rolled hash, never with a fast general-purpose hash
+  (MD5/SHA-family alone), and never stored in plaintext anywhere,
+  including logs, error messages, or database backups.
+- `User.password_hash` is never included in any API response — see
+  [docs/RBAC.md](docs/RBAC.md).
+- JWT access tokens are signed with `JWT_SECRET_KEY` (`SecretStr` in
+  `Settings`, never logged, never returned by any endpoint).
+  `JWT_SECRET_KEY` must be explicitly configured in `staging`/
+  `production`; the application refuses to start otherwise rather than
+  silently signing tokens with an insecure default.
+- Tokens carry only a user identifier and standard claims (`sub`, `iat`,
+  `exp`, `jti`) — never a password hash, role, permissions, or
+  patient/medical data. See [docs/RBAC.md](docs/RBAC.md) for the full
+  token-content and trust-boundary rationale, including the current
+  token-revocation limitation (tokens are stateless and cannot be
+  individually invalidated before expiry in this story).
+- Login failure responses are intentionally generic and do not reveal
+  whether a given email address has an account.
+
+## 7. No Real Patient Data
 
 - This is a demo/development/hackathon-originated repository. **Real patient
   data, real PHI (Protected Health Information), or any real individual's
@@ -71,7 +93,7 @@ statement that AgentCare is not a diagnosis or treatment system.
 - This applies to all environments reachable from this codebase, including
   local development and any public demo deployment.
 
-## 7. Synthetic / Anonymized Test Data Requirement
+## 8. Synthetic / Anonymized Test Data Requirement
 
 - All test fixtures, seed data, and demo data must be synthetic
   (fabricated) or, if derived from real-world patterns, fully anonymized
@@ -79,7 +101,7 @@ statement that AgentCare is not a diagnosis or treatment system.
 - Synthetic data should still be treated with care in structure (e.g.,
   realistic-looking identifiers) but must never map back to a real person.
 
-## 8. Sensitive Logging Restrictions
+## 9. Sensitive Logging Restrictions
 
 - Application logs must never contain: API keys, JWT tokens, passwords,
   database credentials, or patient-identifying information.
@@ -89,7 +111,7 @@ statement that AgentCare is not a diagnosis or treatment system.
 - Debug logging that dumps full request bodies or environment variables is
   not permitted in code paths that could run against real data.
 
-## 9. Medical Document Handling Considerations
+## 10. Medical Document Handling Considerations
 
 - Any future feature that ingests, stores, or processes medical documents
   (referrals, forms, uploaded files) must treat that content as sensitive by
@@ -100,7 +122,7 @@ statement that AgentCare is not a diagnosis or treatment system.
 - Document storage, access control, and retention are open design questions
   to be addressed in a dedicated ADR before implementation, not assumed.
 
-## 10. If a Secret Is Accidentally Committed
+## 11. If a Secret Is Accidentally Committed
 
 If a secret, credential, or token is ever committed to this repository
 (even briefly, even in a branch that's later deleted):
@@ -122,7 +144,7 @@ If a secret, credential, or token is ever committed to this repository
 Rotation is the actual fix. History cleanup is hygiene that happens
 afterward, not a substitute for rotation.
 
-## 11. Responsible Vulnerability Reporting
+## 12. Responsible Vulnerability Reporting
 
 If you discover a security vulnerability in AgentCare:
 
@@ -135,12 +157,12 @@ If you discover a security vulnerability in AgentCare:
   impact.
 - Please allow reasonable time for a fix before any public disclosure.
 
-## 12. Public Repository Security Expectations
+## 13. Public Repository Security Expectations
 
 Because this repository is public:
 
 - Assume everything committed is permanently visible, indexed, and
-  scrapeable, even after deletion (see Section 10).
+  scrapeable, even after deletion (see Section 11).
 - Contributors must review their own diffs before pushing, specifically
   checking for secrets, credentials, and PII/PHI.
 - No compliance certifications (HIPAA, SOC 2, or otherwise) are claimed by

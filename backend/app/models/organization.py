@@ -19,6 +19,7 @@ from app.db.types import enum_values
 
 if TYPE_CHECKING:
     from app.models.facility import Facility
+    from app.models.membership import OrganizationMembership
 
 
 class OrganizationType(StrEnum):
@@ -82,6 +83,16 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # `passive_deletes=True` tells SQLAlchemy to rely on that DB behavior
     # rather than loading and manipulating the whole collection itself.
     facilities: Mapped[list[Facility]] = relationship(
+        back_populates="organization",
+        passive_deletes=True,
+    )
+
+    # Same no-delete-cascade rationale as `facilities` above, applied to
+    # identity records: an ORM `session.delete(org)` must never silently
+    # cascade-delete memberships. The FK
+    # (`organization_memberships.organization_id`, ON DELETE RESTRICT —
+    # see app/models/membership.py) is the actual enforcement point.
+    memberships: Mapped[list[OrganizationMembership]] = relationship(
         back_populates="organization",
         passive_deletes=True,
     )

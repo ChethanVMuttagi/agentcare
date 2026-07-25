@@ -1,14 +1,16 @@
 # AgentCare Architecture
 
-This document describes AgentCare's backend architecture as of STORY-003
-(Organization & Facility Tenancy Foundation), building on STORY-002
-(PostgreSQL & Database Foundation) and STORY-001 (Architecture & Python
-Backend Foundation). It clearly separates **CURRENT** (what exists in the
+This document describes AgentCare's backend architecture as of STORY-004
+(Identity, Membership & RBAC Foundation), building on STORY-003
+(Organization & Facility Tenancy Foundation), STORY-002 (PostgreSQL &
+Database Foundation), and STORY-001 (Architecture & Python Backend
+Foundation). It clearly separates **CURRENT** (what exists in the
 repository today) from **PLANNED** (direction only — not implemented).
 See [README.md](../README.md) for the same distinction applied to the
 project as a whole, [DATABASE.md](DATABASE.md) for the full
-database-layer detail, and [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the
-domain model itself — this document only summarizes both.
+database-layer detail, [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the domain
+model itself, and [RBAC.md](RBAC.md) for the full identity/authentication/
+authorization model — this document only summarizes all three.
 
 ## 1. Architectural Principles
 
@@ -27,7 +29,7 @@ domain model itself — this document only summarizes both.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001 + STORY-002 + STORY-003)
+## 2. Current Architecture (STORY-001 + STORY-002 + STORY-003 + STORY-004)
 
 The backend is a single Python package (`backend/app/`) — a **modular
 monolith**, not yet split into services or layers beyond what's needed
@@ -40,7 +42,14 @@ backend/app/
 ├── api/v1/
 │   ├── router.py         # Aggregates versioned API routes
 │   └── endpoints/
+│       ├── auth.py       # POST /auth/token, GET /auth/me
 │       └── health.py     # GET /api/v1/health, GET /api/v1/ready
+├── auth/
+│   ├── security.py       # hash_password / verify_password (Argon2id)
+│   ├── jwt.py             # create_access_token / decode_access_token (PyJWT)
+│   ├── service.py         # authenticate_user (email+password -> User | None)
+│   └── dependencies.py    # get_current_user, get_current_membership,
+│                           # require_roles — see RBAC.md
 ├── core/
 │   ├── config.py         # Settings (pydantic-settings), Environment enum
 │   ├── logging.py        # Logging configuration
@@ -53,9 +62,12 @@ backend/app/
 │   └── types.py           # enum_values() — shared Enum column helper
 ├── models/
 │   ├── organization.py    # Organization, OrganizationType
-│   └── facility.py        # Facility, FacilityType
+│   ├── facility.py        # Facility, FacilityType
+│   ├── user.py             # User, normalize_email()
+│   └── membership.py       # OrganizationMembership, Role
 └── schemas/
-    └── common.py          # ErrorResponse, HealthResponse, ReadinessResponse
+    ├── common.py          # ErrorResponse, HealthResponse, ReadinessResponse
+    └── auth.py             # TokenRequest, TokenResponse, CurrentUserResponse
 ```
 
 Plus, under `backend/` alongside `app/`: `alembic.ini` and `migrations/`
@@ -94,16 +106,36 @@ What exists today:
   ADR-0003 for the tenancy decision. Nothing queries or writes these
   tables yet outside of tests — there is no CRUD API, service, or
   repository layer for them (Section 3).
+- **Identity, membership, and backend-enforced RBAC** (`app/models/user.py`,
+  `app/models/membership.py`, `app/auth/` — STORY-004): a global `User`
+  identity, `OrganizationMembership` (user + organization + `Role`,
+  `UNIQUE(organization_id, user_id)`), Argon2id password hashing,
+  stateless JWT access tokens (`sub`/`iat`/`exp`/`jti` only),
+  `get_current_user` (401 on failure), and `get_current_membership`/
+  `require_roles` (403 on failure, always re-resolved from the database,
+  never trusted from the token). A minimal auth API exists:
+  `POST /api/v1/auth/token`, `GET /api/v1/auth/me`. See
+  [RBAC.md](RBAC.md) for the full model and ADR-0004 for the decision
+  record. No organization-scoped route consumes `get_current_membership`/
+  `require_roles` yet — they are built and tested ahead of their first
+  route consumer, the same way `get_db_session` was in STORY-002.
 - A structured logging foundation (level, timestamp, logger name, message)
-  with an explicit rule against logging secrets or patient data.
+  with an explicit rule against logging secrets or patient data — this
+  now explicitly includes never logging `JWT_SECRET_KEY`, issued tokens,
+  or plaintext passwords (see [SECURITY.md](../SECURITY.md)).
 - A standardized error response shape and global exception handling that
   never leaks stack traces or internal detail to clients — this also
   covers database errors (never exposing connection strings or driver
-  exception text via the API).
+  exception text via the API) and authentication/authorization failures
+  (never revealing whether an email or organization exists — see
+  [RBAC.md](RBAC.md) Section 7).
 
 What does **not** exist yet: any repository or service layer, any entity
-beyond `Organization`/`Facility`, any CRUD API for those entities, any
-LLM call, any agent, any authentication, any frontend.
+beyond `Organization`/`Facility`/`User`/`OrganizationMembership`, any CRUD
+API for `Organization`/`Facility`, any organization-scoped route enforcing
+`get_current_membership`/`require_roles`, any LLM call, any agent, any
+frontend, public user registration, password reset, email verification,
+refresh tokens, or MFA.
 
 ## 3. Planned Architecture (NOT Implemented)
 
@@ -122,13 +154,19 @@ Everything in this section is direction, not current behavior.
   [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 12.
 - **A CRUD API, service, and/or repository layer for `Organization` and
   `Facility` themselves** — STORY-003 established persistence only.
-- **Tenant-access enforcement** (repository/service/auth-context level —
-  see ADR-0003) once authentication exists.
+- **Organization-scoped routes that actually depend on
+  `get_current_membership`/`require_roles`** — STORY-004 built and
+  tested the enforcement primitives; no route uses them yet, because no
+  organization-scoped route exists yet.
+- **Patient self-access rules**, once a `Patient` entity exists — see
+  [RBAC.md](RBAC.md) Section 10.
+- **Finer-grained permissions** beyond the current closed `Role` enum
+  (`admin`/`staff`/`patient`), refresh tokens, and token
+  revocation/session control — see [RBAC.md](RBAC.md) Sections 9 and 11.
 - **LangGraph-based agent workflows** for coordination tasks (scheduling,
   intake, referrals, follow-ups), invoked through the service layer.
 - **An LLM provider abstraction** so agents/workflows are not hardcoded to
   a single vendor (Groq / OpenAI / Anthropic).
-- **RBAC** (role-based access control) for authenticated users and staff.
 - **Docker** packaging for consistent local/dev/prod environments.
 - **A Next.js frontend** consuming the versioned API.
 
@@ -173,8 +211,24 @@ structural, not just a convention:
 
 - Secrets are never hardcoded and never logged (see
   [SECURITY.md](../SECURITY.md) and `app/core/logging.py`). Settings fields
-  that hold credentials — including `DATABASE_URL` — use Pydantic's
-  `SecretStr`, which masks the value in `repr()`/`str()` output.
+  that hold credentials — including `DATABASE_URL` and `JWT_SECRET_KEY` —
+  use Pydantic's `SecretStr`, which masks the value in `repr()`/`str()`
+  output.
+- `JWT_SECRET_KEY` must be explicitly configured in `staging`/`production`
+  — a settings validator rejects startup otherwise, the same
+  fail-loud-not-silent pattern as the `production`+`DEBUG=true` rule
+  below. `development`/`test` may run without one (an unconfigured
+  secret is a startup-time `RuntimeError` only if a token is actually
+  requested there — see [RBAC.md](RBAC.md) Section 3).
+- Passwords are never hashed by hand — `app/auth/security.py` wraps
+  `argon2-cffi` exclusively. JWTs are never encoded/decoded by hand —
+  `app/auth/jwt.py` wraps `PyJWT` exclusively. Plaintext passwords are
+  never persisted or logged; `password_hash` is never returned by any API
+  response (`app/schemas/auth.py`'s `CurrentUserResponse` deliberately
+  excludes it). See [RBAC.md](RBAC.md) for the full model.
+- Authorization is always re-resolved from the database on every
+  request — a JWT is never trusted for organization membership or role
+  (see [RBAC.md](RBAC.md) Section 4 and ADR-0004).
 - The application must be able to start, and pass health checks, **without**
   any LLM API key or database connection configured. `DATABASE_URL` is
   optional at the configuration layer in every environment, and the real
@@ -256,9 +310,21 @@ tools will simply not expose clinical-decision capabilities.
   PostgreSQL (not SQLite), each test isolated by a rolled-back savepoint
   — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 10 for what's covered
   and why SQLite isn't used here.
+- Coverage added in STORY-004: `User`/`OrganizationMembership` model
+  tests, password hashing/verification, JWT creation/decoding
+  (including expiry and tampered-signature rejection),
+  `authenticate_user` (including the unknown-email/wrong-password/
+  inactive-user response uniformity), `get_current_user`/
+  `get_current_membership`/`require_roles` (401 vs. 403, inactive user,
+  inactive membership, wrong role, cross-organization isolation), and the
+  `POST /auth/token`/`GET /auth/me` endpoints end-to-end — all against
+  real PostgreSQL, via `httpx.AsyncClient` + `ASGITransport` rather than
+  `starlette.testclient.TestClient` (the latter's separate event-loop
+  thread is incompatible with sharing an async DB session created in the
+  test's own event loop — see `backend/tests/conftest.py`).
 - Test values (e.g. a JWT secret used only to test that `SecretStr` masking
-  works, or synthetic organization/facility names) are synthetic and
-  clearly non-production.
+  works, or synthetic organization/facility/user/email/password values)
+  are synthetic and clearly non-production.
 - As services, repositories, and workflows are introduced, this section
   will describe how unit, integration, and end-to-end layers divide.
 
@@ -271,13 +337,23 @@ FK. Every future tenant-owned entity is expected to carry
 [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 5 and ADR-0003 for the full
 decision, including what is deliberately **not** yet enforced.
 
+**Extended (STORY-004, ADR-0004)**: identity (`User`) is deliberately
+*not* tenant-scoped — a `User` may hold at most one `OrganizationMembership`
+per organization, but memberships in multiple organizations. Request-level
+tenant access is now resolvable via `get_current_membership`/
+`require_roles` (`app/auth/dependencies.py`), which re-query
+`OrganizationMembership` fresh from the database on every request rather
+than trusting anything cached in a JWT — see [RBAC.md](RBAC.md) Sections
+1, 4–6 and ADR-0004. This is enforcement *primitives*, not yet enforcement
+*coverage*: no route currently depends on them (Section 3).
+
 **Still planned**: there is no global, automatic tenant-access filter at
 the query level, and none is assumed. That enforcement is deferred,
-deliberately, to a future repository/service/auth-context layer — not
-implicitly relied upon, not silently skipped. Row-level security and a
+deliberately, to individual routes explicitly depending on
+`get_current_membership`/`require_roles` as they're built — not implicitly
+relied upon, not silently skipped. Row-level security and a
 schema-per-tenant/database-per-tenant alternative were both considered
-and deferred (not rejected) in ADR-0003, pending the authentication
-design they'd depend on.
+and deferred (not rejected) in ADR-0003.
 
 ## 11. Observability Direction (Planned)
 

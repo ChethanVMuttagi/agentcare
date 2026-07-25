@@ -10,6 +10,11 @@ an unconfigured database is fine outside development/test. `ok` and
 Uses `app.dependency_overrides` on `get_database_readiness_check` to
 simulate each database state (no real database connection needed) and
 `monkeypatch` + `Settings` cache clearing to vary `APP_ENV`.
+
+Every test also sets a synthetic `JWT_SECRET_KEY` (STORY-004: `Settings`
+now requires one whenever `APP_ENV` is `staging`/`production` — unrelated
+to what this file actually tests, but required for `Settings` to
+construct at all in those environments).
 """
 
 from __future__ import annotations
@@ -25,9 +30,12 @@ from app.core.config import get_settings
 from app.main import create_app
 from app.schemas.common import ReadinessCheck
 
+_SYNTHETIC_JWT_SECRET = "synthetic-test-jwt-secret-do-not-use-in-production-32chars"
+
 
 @pytest.fixture(autouse=True)
-def _clear_settings_cache() -> None:
+def _configure_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JWT_SECRET_KEY", _SYNTHETIC_JWT_SECRET)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

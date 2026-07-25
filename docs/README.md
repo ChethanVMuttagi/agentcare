@@ -6,13 +6,14 @@ documentation is not backfilled after the fact.
 
 ## Status
 
-As of STORY-003 (Organization & Facility tenancy foundation), this index,
-the [Architecture Decision Records](adr/README.md) process,
-[ARCHITECTURE.md](ARCHITECTURE.md), [DATABASE.md](DATABASE.md), and
-[DOMAIN_MODEL.md](DOMAIN_MODEL.md) exist. The remaining documents listed
-below are **reserved and intentionally not yet created**. Each will be
-added when the story that needs it is implemented, so that documentation
-never describes functionality that doesn't exist yet.
+As of STORY-004 (Identity, Membership & RBAC Foundation), this index, the
+[Architecture Decision Records](adr/README.md) process,
+[ARCHITECTURE.md](ARCHITECTURE.md), [DATABASE.md](DATABASE.md),
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md), and [RBAC.md](RBAC.md) exist. The
+remaining documents listed below are **reserved and intentionally not yet
+created**. Each will be added when the story that needs it is
+implemented, so that documentation never describes functionality that
+doesn't exist yet.
 
 ## Planned Documents
 
@@ -23,7 +24,6 @@ never describes functionality that doesn't exist yet.
 | `AGENTS.md` | Agentic AI components: roles, responsibilities, boundaries |
 | `TOOLS.md` | Tools exposed to agents and how they're governed |
 | `WORKFLOWS.md` | LangGraph workflows / orchestration design |
-| `RBAC.md` | Roles, permissions, and access control model |
 | `SAFETY.md` | Safety constraints for an agentic healthcare-adjacent system |
 | `SECURITY.md` | See [SECURITY.md](../SECURITY.md) at the repository root |
 | `PRIVACY.md` | Data privacy handling and boundaries |
@@ -34,6 +34,10 @@ never describes functionality that doesn't exist yet.
 | `DEPLOYMENT.md` | Deployment topology and process |
 | `DEMO.md` | How to run/present the demo |
 | `REQUIREMENTS_TRACEABILITY.md` | Mapping of stories/requirements to implementation and tests |
+
+`RBAC.md` (identity, authentication, and authorization model) was
+implemented in STORY-004 — see [RBAC.md](RBAC.md) directly rather than
+the table above.
 
 ## Documentation Principles
 

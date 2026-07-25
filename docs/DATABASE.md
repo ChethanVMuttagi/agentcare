@@ -1,16 +1,18 @@
 # AgentCare Database
 
-This document describes the database foundation implemented in STORY-002
-and extended in STORY-003 (the first real domain tables and migration —
-see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the Organization/Facility
-model itself). It follows the same CURRENT vs. PLANNED discipline as
+This document describes the database foundation implemented in STORY-002,
+extended in STORY-003 (the first real domain tables and migration), and
+further extended in STORY-004 (identity/membership tables and a second
+migration) — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself
+and [RBAC.md](RBAC.md) for the identity/authorization model these tables
+back. It follows the same CURRENT vs. PLANNED discipline as
 [ARCHITECTURE.md](ARCHITECTURE.md): everything described here as
 implemented exists in the repository today; anything marked PLANNED does
 not yet.
 
-Only two domain tables exist so far: `organizations` and `facilities` —
-see [DOMAIN_MODEL.md](DOMAIN_MODEL.md). No other healthcare domain tables
-exist yet.
+Four domain tables exist so far: `organizations`, `facilities`, `users`,
+and `organization_memberships` — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md).
+No other healthcare domain tables exist yet.
 
 ## 1. PostgreSQL as Production System of Record
 
@@ -29,18 +31,19 @@ The ORM/Core layer is SQLAlchemy 2.x, using its modern declarative style:
   `uq_organizations_slug`, not a driver-generated name) — set once,
   before the first migration, so Alembic autogenerate diffs against
   predictable names.
-- `app/models/organization.py` and `app/models/facility.py` (STORY-003)
-  are the first real `Mapped[...]`-typed model classes — SQLAlchemy 2.x's
+- `app/models/organization.py` and `app/models/facility.py` (STORY-003),
+  and `app/models/user.py` and `app/models/membership.py` (STORY-004),
+  are the real `Mapped[...]`-typed model classes — SQLAlchemy 2.x's
   native typed mapping (`Mapped[str]`, `mapped_column(...)`), not the
   legacy 1.x style. See [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the models
   themselves and `app/db/mixins.py` for the shared `UUIDPrimaryKeyMixin`/
   `TimestampMixin` they're built on.
-- Enum-backed columns (`OrganizationType`, `FacilityType`) use
-  SQLAlchemy's `Enum` type with `native_enum=False` (VARCHAR + a real
-  `CHECK` constraint, not a native PostgreSQL `ENUM` type) and
-  `values_callable` (persist each member's lowercase `.value`, not its
-  uppercase Python name) — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section
-  6 for the full rationale.
+- Enum-backed columns (`OrganizationType`, `FacilityType`, and — as of
+  STORY-004 — `Role` on `OrganizationMembership`) use SQLAlchemy's `Enum`
+  type with `native_enum=False` (VARCHAR + a real `CHECK` constraint, not
+  a native PostgreSQL `ENUM` type) and `values_callable` (persist each
+  member's lowercase `.value`, not its uppercase Python name) — see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 9 for the full rationale.
 
 ## 3. asyncpg
 
@@ -193,6 +196,18 @@ Alembic is configured under `backend/` (`backend/alembic.ini`,
   from review. Validated against real PostgreSQL: applied, inspected,
   downgraded, and re-applied cleanly (see the STORY-003 report for the
   full validation transcript).
+- **Second migration (STORY-004)**: `445bcf7d22b9_create_users_and_organization_.py`
+  (`down_revision = "3e41d3b01f81"`) creates `users` (unique `email`,
+  `password_hash`, `is_active`) and `organization_memberships` (FKs to
+  `organizations`/`users` with `ondelete="RESTRICT"`, a `role` column with
+  a real `CHECK` constraint, `UNIQUE(organization_id, user_id)`, and
+  indexes on both FK columns) — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md)
+  Sections 4–5 for the schema itself. Same review/reformat discipline as
+  the first migration. Validated against real PostgreSQL: applied,
+  inspected (columns, constraints, indexes), downgraded one step (with
+  `organizations`/`facilities` data confirmed untouched), and re-applied
+  cleanly. Contains no seeded users, passwords, or credentials of any
+  kind — only schema DDL.
 
 ## 9. Migration Commands
 
@@ -277,18 +292,33 @@ DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentca
   instance. It is not a prerequisite for running the test suite
   day-to-day (though it — and the domain model tests below — were run
   against a real local PostgreSQL 16 instance as part of STORY-003).
-- **Domain model tests** (`backend/tests/models/` — STORY-003) run
-  exclusively against real PostgreSQL, same skip condition
+- **Domain model tests** (`backend/tests/models/` — STORY-003, extended
+  STORY-004 with `test_user.py`/`test_membership.py`) run exclusively
+  against real PostgreSQL, same skip condition
   (`AGENTCARE_TEST_POSTGRES_URL`), because nearly everything meaningful
-  about `Organization`/`Facility` (uniqueness, the composite unique
-  constraint, the FK's `ON DELETE RESTRICT`, the enum `CHECK`
-  constraints) is database-enforced behavior SQLite doesn't replicate
-  faithfully — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 10 and
-  Section 12 below. Each test runs inside a savepoint that's always
-  rolled back (`tests/models/conftest.py`), so no synthetic data persists
-  in the shared development database.
-- All STORY-001/002 tests (app factory, health, error handling, config,
-  engine/session) continue to pass unmodified by STORY-003.
+  about these models (uniqueness, composite unique constraints, FK
+  `ON DELETE RESTRICT`, enum `CHECK` constraints) is database-enforced
+  behavior SQLite doesn't replicate faithfully — see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 10 and Section 12 below.
+  Each test runs inside a savepoint that's always rolled back
+  (`tests/conftest.py`), so no synthetic data persists in the shared
+  development database.
+- **Auth tests** (`backend/tests/auth/`, `backend/tests/api/test_auth_endpoints.py`
+  — STORY-004) also run against real PostgreSQL under the same savepoint
+  isolation: password hashing/verification, JWT creation/decoding,
+  `authenticate_user`, `get_current_user`/`get_current_membership`/
+  `require_roles`, and the `POST /auth/token`/`GET /auth/me` endpoints
+  end-to-end. HTTP-level tests use `httpx.AsyncClient` +
+  `ASGITransport` rather than `starlette.testclient.TestClient`, because
+  `TestClient` dispatches requests through a separate anyio event-loop
+  thread that cannot safely share the asyncpg connection the
+  `db_session` fixture opens in the test's own event loop.
+- All STORY-001/002/003 tests continue to pass unmodified by STORY-004,
+  aside from two pre-existing tests whose environment fixtures needed a
+  synthetic `JWT_SECRET_KEY` added once the new
+  staging/production-requires-a-JWT-secret validator (Section 10) landed
+  (`tests/api/test_readiness_environment.py`) — a legitimate contract
+  change, not a weakened test.
 
 ## 12. SQLite Limitations (Testing Only)
 
@@ -312,8 +342,11 @@ important not to over-trust it:
 
 ## 13. Secret Handling
 
-- `DATABASE_URL` is `SecretStr` in `Settings` — never printed in full via
-  `repr()`/`str()`/accidental logging of the settings object.
+- `DATABASE_URL` and `JWT_SECRET_KEY` are both `SecretStr` in `Settings`
+  — never printed in full via `repr()`/`str()`/accidental logging of the
+  settings object. `JWT_SECRET_KEY` is never logged anywhere, including
+  by `app/auth/jwt.py` on encode/decode failure — see
+  [RBAC.md](RBAC.md) and [SECURITY.md](../SECURITY.md).
 - `app/db/health.py` never returns or logs the raw connection string; on
   failure it logs a generic message with `logger.exception(...)` (full
   traceback goes to server-side logs only) and returns only `True`/

@@ -51,7 +51,10 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
 
     # --- Auth --------------------------------------------------------------------
+    # Optional in development/test only — see `_require_jwt_secret_outside_development`.
     jwt_secret_key: SecretStr | None = None
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 30
 
     # --- Frontend ------------------------------------------------------------------
     frontend_url: str | None = None
@@ -60,6 +63,18 @@ class Settings(BaseSettings):
     def _forbid_debug_in_production(self) -> Settings:
         if self.app_env is Environment.PRODUCTION and self.debug:
             raise ValueError("DEBUG must not be enabled when APP_ENV=production.")
+        return self
+
+    @model_validator(mode="after")
+    def _require_jwt_secret_outside_development(self) -> Settings:
+        if (
+            self.app_env in (Environment.STAGING, Environment.PRODUCTION)
+            and self.jwt_secret_key is None
+        ):
+            raise ValueError(
+                "JWT_SECRET_KEY must be set when APP_ENV is staging or production — "
+                "the application must not silently sign/verify tokens without a real secret."
+            )
         return self
 
 
