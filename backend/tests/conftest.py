@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import date
 
 import pytest
 from fastapi import FastAPI
@@ -26,6 +27,7 @@ from app.db.session import get_db_session
 from app.main import create_app
 from app.models.membership import OrganizationMembership, Role
 from app.models.organization import Organization, OrganizationType
+from app.models.patient import Patient
 from app.models.user import User
 
 
@@ -167,5 +169,47 @@ def make_membership(
         db_session.add(membership)
         await db_session.flush()
         return membership
+
+    return _make
+
+
+@pytest.fixture()
+def make_patient(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[Patient]]:
+    """Factory for a synthetic, flushed (never committed) Patient.
+
+    `patient_number` has no default — callers should pass an obviously
+    synthetic, test-unique value (uniqueness is only enforced per
+    organization, so plain suffixed values like ``"PN-001"`` are fine
+    within a single test unless testing the conflict itself). `user`, if
+    given, links the patient to that `User`'s `id` — this fixture does
+    NOT validate organization-membership/role linkage rules itself (that
+    is `app.services.patient`'s job); it is a raw factory for model-level
+    and repository-level tests that need to set up rows directly.
+    """
+
+    async def _make(
+        organization: Organization,
+        patient_number: str,
+        *,
+        user: User | None = None,
+        first_name: str = "Synthetic",
+        last_name: str = "Patient",
+        date_of_birth: date = date(1990, 1, 1),
+        is_active: bool = True,
+    ) -> Patient:
+        patient = Patient(
+            organization_id=organization.id,
+            user_id=user.id if user is not None else None,
+            patient_number=patient_number,
+            first_name=first_name,
+            last_name=last_name,
+            date_of_birth=date_of_birth,
+            is_active=is_active,
+        )
+        db_session.add(patient)
+        await db_session.flush()
+        return patient
 
     return _make

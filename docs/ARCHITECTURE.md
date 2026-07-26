@@ -1,16 +1,18 @@
 # AgentCare Architecture
 
-This document describes AgentCare's backend architecture as of STORY-004
-(Identity, Membership & RBAC Foundation), building on STORY-003
-(Organization & Facility Tenancy Foundation), STORY-002 (PostgreSQL &
-Database Foundation), and STORY-001 (Architecture & Python Backend
-Foundation). It clearly separates **CURRENT** (what exists in the
-repository today) from **PLANNED** (direction only — not implemented).
-See [README.md](../README.md) for the same distinction applied to the
+This document describes AgentCare's backend architecture as of STORY-005
+(Patient Domain, Self-Access & Tenant-Safe API), building on STORY-004
+(Identity, Membership & RBAC Foundation), STORY-003 (Organization &
+Facility Tenancy Foundation), STORY-002 (PostgreSQL & Database
+Foundation), and STORY-001 (Architecture & Python Backend Foundation). It
+clearly separates **CURRENT** (what exists in the repository today) from
+**PLANNED** (direction only — not implemented). See
+[README.md](../README.md) for the same distinction applied to the
 project as a whole, [DATABASE.md](DATABASE.md) for the full
 database-layer detail, [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the domain
-model itself, and [RBAC.md](RBAC.md) for the full identity/authentication/
-authorization model — this document only summarizes all three.
+model itself, [RBAC.md](RBAC.md) for the full identity/authentication/
+authorization model, and [PATIENTS.md](PATIENTS.md) for the patient
+domain this story adds — this document only summarizes all four.
 
 ## 1. Architectural Principles
 
@@ -29,11 +31,10 @@ authorization model — this document only summarizes all three.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001 + STORY-002 + STORY-003 + STORY-004)
+## 2. Current Architecture (STORY-001 through STORY-005)
 
 The backend is a single Python package (`backend/app/`) — a **modular
-monolith**, not yet split into services or layers beyond what's needed
-today:
+monolith**:
 
 ```
 backend/app/
@@ -43,7 +44,8 @@ backend/app/
 │   ├── router.py         # Aggregates versioned API routes
 │   └── endpoints/
 │       ├── auth.py       # POST /auth/token, GET /auth/me
-│       └── health.py     # GET /api/v1/health, GET /api/v1/ready
+│       ├── health.py     # GET /api/v1/health, GET /api/v1/ready
+│       └── patients.py   # POST/GET .../patients, .../patients/{id}, .../patients/me
 ├── auth/
 │   ├── security.py       # hash_password / verify_password (Argon2id)
 │   ├── jwt.py             # create_access_token / decode_access_token (PyJWT)
@@ -64,10 +66,16 @@ backend/app/
 │   ├── organization.py    # Organization, OrganizationType
 │   ├── facility.py        # Facility, FacilityType
 │   ├── user.py             # User, normalize_email()
-│   └── membership.py       # OrganizationMembership, Role
+│   ├── membership.py       # OrganizationMembership, Role
+│   └── patient.py          # Patient, normalize_person_name()
+├── repositories/
+│   └── patient.py         # Tenant-scoped persistence/query only — see PATIENTS.md
+├── services/
+│   └── patient.py         # PatientService — business rules + transaction ownership
 └── schemas/
     ├── common.py          # ErrorResponse, HealthResponse, ReadinessResponse
-    └── auth.py             # TokenRequest, TokenResponse, CurrentUserResponse
+    ├── auth.py             # TokenRequest, TokenResponse, CurrentUserResponse
+    └── patient.py           # PatientCreate, PatientResponse, PatientListResponse
 ```
 
 Plus, under `backend/` alongside `app/`: `alembic.ini` and `migrations/`
@@ -116,50 +124,59 @@ What exists today:
   never trusted from the token). A minimal auth API exists:
   `POST /api/v1/auth/token`, `GET /api/v1/auth/me`. See
   [RBAC.md](RBAC.md) for the full model and ADR-0004 for the decision
-  record. No organization-scoped route consumes `get_current_membership`/
-  `require_roles` yet — they are built and tested ahead of their first
-  route consumer, the same way `get_db_session` was in STORY-002.
+  record.
+- **The first tenant-scoped domain resource, repository, service, and
+  protected API** (`app/models/patient.py`, `app/repositories/patient.py`,
+  `app/services/patient.py`, `app/api/v1/endpoints/patients.py` —
+  STORY-005): `Patient`, an ADMINISTRATIVE patient record belonging to
+  exactly one `Organization`, optionally linked to a `User`. This is the
+  first route that actually depends on `get_current_membership`/
+  `require_roles` (Section 4 established the pattern; this story
+  consumes it) — every patient read/write requires an explicit
+  `organization_id`, and there is no unscoped repository function that a
+  route could call by mistake. Also the first real mutating-transaction
+  pattern (`Route -> Service -> Repository -> Session`, with the service
+  owning commit/no-commit — Section 4). See [PATIENTS.md](PATIENTS.md)
+  for the full model and ADR-0005 for the decision record.
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data — this
   now explicitly includes never logging `JWT_SECRET_KEY`, issued tokens,
-  or plaintext passwords (see [SECURITY.md](../SECURITY.md)).
+  plaintext passwords, or `PatientCreate` payloads (see
+  [SECURITY.md](../SECURITY.md)).
 - A standardized error response shape and global exception handling that
   never leaks stack traces or internal detail to clients — this also
   covers database errors (never exposing connection strings or driver
-  exception text via the API) and authentication/authorization failures
+  exception text via the API), authentication/authorization failures
   (never revealing whether an email or organization exists — see
-  [RBAC.md](RBAC.md) Section 7).
+  [RBAC.md](RBAC.md) Section 7), and patient lookups (never revealing
+  that a patient UUID exists under a different organization — see
+  [PATIENTS.md](PATIENTS.md) Section 10).
 
-What does **not** exist yet: any repository or service layer, any entity
-beyond `Organization`/`Facility`/`User`/`OrganizationMembership`, any CRUD
-API for `Organization`/`Facility`, any organization-scoped route enforcing
-`get_current_membership`/`require_roles`, any LLM call, any agent, any
-frontend, public user registration, password reset, email verification,
-refresh tokens, or MFA.
+What does **not** exist yet: a repository or service layer for
+`Organization`/`Facility` themselves; any entity beyond `Organization`/
+`Facility`/`User`/`OrganizationMembership`/`Patient`; any CRUD API for
+`Organization`/`Facility`; patient update/delete; any LLM call; any
+agent; any frontend; public user registration; password reset; email
+verification; refresh tokens; or MFA.
 
 ## 3. Planned Architecture (NOT Implemented)
 
 Everything in this section is direction, not current behavior.
 
-- **A service layer** between API routes and data access, encapsulating
-  business rules so route handlers stay thin.
-- **A repository layer** encapsulating database access behind an
-  interface (built on top of the `app/db/` session foundation from
-  STORY-002 and the `Organization`/`Facility` models from STORY-003), so
-  services (and, indirectly, agents) don't issue raw queries.
+- **A service/repository layer for `Organization`/`Facility` themselves**
+  — STORY-005 established the `Route -> Service -> Repository -> Session`
+  pattern for `Patient`, but `Organization`/`Facility` still have no
+  service, repository, or CRUD API of their own; STORY-003 established
+  persistence only.
 - **Further healthcare domain models** below the tenant hierarchy
-  (patients, appointments, referrals, staff, documents, etc.), as
-  SQLAlchemy 2.x `Mapped[...]` classes subclassing `app.db.base.Base` —
-  `Organization`/`Facility` (STORY-003) are the first, not the last; see
-  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 12.
-- **A CRUD API, service, and/or repository layer for `Organization` and
-  `Facility` themselves** — STORY-003 established persistence only.
-- **Organization-scoped routes that actually depend on
-  `get_current_membership`/`require_roles`** — STORY-004 built and
-  tested the enforcement primitives; no route uses them yet, because no
-  organization-scoped route exists yet.
-- **Patient self-access rules**, once a `Patient` entity exists — see
-  [RBAC.md](RBAC.md) Section 10.
+  (appointments, referrals, staff, documents, etc.), as SQLAlchemy 2.x
+  `Mapped[...]` classes subclassing `app.db.base.Base` — `Organization`/
+  `Facility` (STORY-003), `User`/`OrganizationMembership` (STORY-004),
+  and `Patient` (STORY-005) are the first, not the last; see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 15.
+- **Patient update/delete** — only create, get-by-id, list, and
+  self-access exist (STORY-005) — see [PATIENTS.md](PATIENTS.md)
+  Section 13.
 - **Finer-grained permissions** beyond the current closed `Role` enum
   (`admin`/`staff`/`patient`), refresh tokens, and token
   revocation/session control — see [RBAC.md](RBAC.md) Sections 9 and 11.
@@ -172,11 +189,11 @@ Everything in this section is direction, not current behavior.
 
 ## 4. Backend Layering Philosophy
 
-The intended request flow, once later stories build it out, is:
+The intended request flow, once every layer is built out, is:
 
 ```
 Route (API layer)
-  → Service (business rules / orchestration)
+  → Service (business rules / orchestration / transaction ownership)
     → Workflow (LangGraph, for agentic coordination tasks)
       → Agent (a bounded, tool-using participant in a workflow)
         → Tool (a narrow, explicit capability an agent is allowed to invoke)
@@ -184,10 +201,22 @@ Route (API layer)
       → Database (PostgreSQL)
 ```
 
+**`Route → Service → Repository → Database` is CURRENT as of STORY-005**
+for the patient domain (`app/api/v1/endpoints/patients.py` →
+`app.services.patient.PatientService` → `app.repositories.patient` →
+`AsyncSession`) — the first real instance of this pattern, established
+for every future domain resource to follow. `Workflow`/`Agent`/`Tool`
+remain PLANNED (Section 3) — no agentic coordination exists yet.
+
 Routes stay thin: they parse/validate input, call a service, and shape the
-response. Services hold business rules and decide whether a task needs a
-workflow at all. Workflows orchestrate multi-step agent coordination.
-Agents never bypass their tools to act directly on the system.
+response. Services hold business rules AND own the transaction boundary
+for mutating operations (`PatientService.create_patient` commits; the
+repository only ever adds/flushes — see [PATIENTS.md](PATIENTS.md)
+Section 6 and [DATABASE.md](DATABASE.md) "Transaction Ownership
+Philosophy"). Once workflows exist, services will also decide whether a
+task needs one at all. Workflows will orchestrate multi-step agent
+coordination. Agents will never bypass their tools to act directly on
+the system.
 
 ## 5. Why Agents Will Not Directly Access the Database
 
@@ -204,7 +233,7 @@ structural, not just a convention:
   surface of the schema.
 - **Healthcare safety boundary**: this project must not let an agent
   autonomously take actions (e.g. modifying medical/clinical records) that
-  belong under human supervision (see Section 8). Constraining agents to
+  belong under human supervision (see Section 7). Constraining agents to
   tools is what makes that boundary enforceable rather than aspirational.
 
 ## 6. Security Boundaries
@@ -229,6 +258,15 @@ structural, not just a convention:
 - Authorization is always re-resolved from the database on every
   request — a JWT is never trusted for organization membership or role
   (see [RBAC.md](RBAC.md) Section 4 and ADR-0004).
+- `Patient` (STORY-005) holds administrative fields only — no diagnosis,
+  symptoms, medication, treatment, clinical notes, insurance, or
+  emergency-triage content exists anywhere in the domain model (see
+  Section 7 above and [PATIENTS.md](PATIENTS.md) Section 1). Patient
+  lookups are tenant-scoped
+  by construction (`app/repositories/patient.py` has no unscoped read),
+  and cross-tenant lookups return the same "not found" response as a
+  truly nonexistent id — never disclosing that a patient exists under a
+  different organization (see [PATIENTS.md](PATIENTS.md) Section 10).
 - The application must be able to start, and pass health checks, **without**
   any LLM API key or database connection configured. `DATABASE_URL` is
   optional at the configuration layer in every environment, and the real
@@ -308,7 +346,7 @@ tools will simply not expose clinical-decision capabilities.
 - Coverage added in STORY-003: the `Organization`/`Facility` domain model
   suite (`backend/tests/models/`) runs exclusively against real
   PostgreSQL (not SQLite), each test isolated by a rolled-back savepoint
-  — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 10 for what's covered
+  — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 14 for what's covered
   and why SQLite isn't used here.
 - Coverage added in STORY-004: `User`/`OrganizationMembership` model
   tests, password hashing/verification, JWT creation/decoding
@@ -322,9 +360,20 @@ tools will simply not expose clinical-decision capabilities.
   `starlette.testclient.TestClient` (the latter's separate event-loop
   thread is incompatible with sharing an async DB session created in the
   test's own event loop — see `backend/tests/conftest.py`).
+- Coverage added in STORY-005: `Patient` model tests (constraints,
+  `NULL`-distinctness, normalization, future-DOB rejection);
+  `app.repositories.patient` tests (tenant-scoped get/list, cross-tenant
+  isolation, that `create()` flushes but never commits);
+  `PatientService` tests (patient-number conflict, all four user-linkage
+  rejection reasons, tenant-scoped retrieval, self-access); and the full
+  patient API authorization matrix end-to-end (admin/staff/patient ×
+  create/list/get/me, inactive-membership rejection, cross-tenant lookup
+  returning 404, and that a patient response never contains anything
+  beyond the documented administrative fields) — all against real
+  PostgreSQL.
 - Test values (e.g. a JWT secret used only to test that `SecretStr` masking
-  works, or synthetic organization/facility/user/email/password values)
-  are synthetic and clearly non-production.
+  works, or synthetic organization/facility/user/email/password/patient
+  values) are synthetic and clearly non-production.
 - As services, repositories, and workflows are introduced, this section
   will describe how unit, integration, and end-to-end layers divide.
 
@@ -334,24 +383,33 @@ tools will simply not expose clinical-decision capabilities.
 boundary; `Facility` belongs to exactly one Organization via a required
 FK. Every future tenant-owned entity is expected to carry
 `organization_id`, directly or through an explicit ownership path. See
-[DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 5 and ADR-0003 for the full
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 9 and ADR-0003 for the full
 decision, including what is deliberately **not** yet enforced.
 
 **Extended (STORY-004, ADR-0004)**: identity (`User`) is deliberately
 *not* tenant-scoped — a `User` may hold at most one `OrganizationMembership`
 per organization, but memberships in multiple organizations. Request-level
-tenant access is now resolvable via `get_current_membership`/
+tenant access is resolvable via `get_current_membership`/
 `require_roles` (`app/auth/dependencies.py`), which re-query
 `OrganizationMembership` fresh from the database on every request rather
 than trusting anything cached in a JWT — see [RBAC.md](RBAC.md) Sections
-1, 4–6 and ADR-0004. This is enforcement *primitives*, not yet enforcement
-*coverage*: no route currently depends on them (Section 3).
+1, 4–6 and ADR-0004.
+
+**Enforced end-to-end (STORY-005, ADR-0005)**: `Patient` is the first
+tenant-owned resource with a real, protected route depending on those
+primitives. Beyond request-level membership/role checks,
+`app/repositories/patient.py` requires an explicit `organization_id` on
+every function — there is no unscoped read to call by mistake — and
+cross-tenant lookups return the same "not found" response as a truly
+nonexistent id (Section 6, [PATIENTS.md](PATIENTS.md) Section 10),
+closing the "does this let a non-member learn a resource exists
+elsewhere" gap for this resource specifically.
 
 **Still planned**: there is no global, automatic tenant-access filter at
-the query level, and none is assumed. That enforcement is deferred,
-deliberately, to individual routes explicitly depending on
-`get_current_membership`/`require_roles` as they're built — not implicitly
-relied upon, not silently skipped. Row-level security and a
+the query level, and none is assumed — each future domain resource's
+repository must independently require `organization_id` on every
+function, the way `app.repositories.patient` does, rather than relying on
+a shared interceptor. Row-level security and a
 schema-per-tenant/database-per-tenant alternative were both considered
 and deferred (not rejected) in ADR-0003.
 

@@ -1,15 +1,18 @@
 # AgentCare Identity, Authentication & Authorization (RBAC)
 
 This document describes the identity, authentication, and authorization
-foundation implemented in STORY-004. It follows the same CURRENT vs.
-PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md): everything
-described here as implemented exists in the repository today; anything
-marked PLANNED does not yet.
+foundation implemented in STORY-004, and how STORY-005 puts it to work
+against a real domain resource for the first time (`Patient` — see
+[PATIENTS.md](PATIENTS.md) for the full patient-domain model). It follows
+the same CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md):
+everything described here as implemented exists in the repository today;
+anything marked PLANNED does not yet.
 
-This is security-critical infrastructure, built before any patient data,
-appointments, documents, workflows, or agents exist — see
+This is security-critical infrastructure — see
 [adr/ADR-0004-identity-and-authorization.md](adr/ADR-0004-identity-and-authorization.md)
-for the decision record.
+and
+[adr/ADR-0005-patient-identity-and-access.md](adr/ADR-0005-patient-identity-and-access.md)
+for the decision records.
 
 ## 1. Identity Model: User vs. OrganizationMembership
 
@@ -41,7 +44,7 @@ user_id)` (at most one membership per user per organization) — see
 |---|---|
 | `admin` | Organization-level administrative access. |
 | `staff` | The healthcare organization's administrative/operational staff. |
-| `patient` | Patient-facing access — will be constrained to the patient's own records/workflows once a `Patient` entity exists (Section 10). |
+| `patient` | Patient-facing access — constrained to the patient's own linked record (Section 10; see [PATIENTS.md](PATIENTS.md)). |
 
 Persisted the same way as `OrganizationType`/`FacilityType`
 ([DOMAIN_MODEL.md](DOMAIN_MODEL.md) "Enum Strategy"): `VARCHAR` + a real
@@ -51,11 +54,11 @@ future role is an ordinary migration, not an `ALTER TYPE`.
 
 **Role is one input into authorization, not the complete decision.** A
 `PATIENT`-role membership having "patient-facing access" does not, by
-itself, define exactly what that membership can reach — once a `Patient`
-entity exists, self-access rules (a patient can only see their *own*
-records) will further constrain access beyond what the role alone
-implies (Section 10). `require_roles` (Section 6) checks role membership;
-it does not, and will not, become the entire authorization system.
+itself, define exactly what that membership can reach — self-access rules
+(Section 10; a patient can only see their *own* linked record) further
+constrain access beyond what the role alone implies. `require_roles`
+(Section 6) checks role membership; it does not, and will not, become the
+entire authorization system.
 
 ## 3. Authentication
 
@@ -154,7 +157,9 @@ independently inside individual route functions — a route declares its
 required role(s) once, in its dependency list, and the same, tested logic
 enforces it everywhere.
 
-**Not yet wired into any route** — see Section 8.
+**Wired into a real route as of STORY-005**:
+`app/api/v1/endpoints/patients.py` — see Section 8 and
+[PATIENTS.md](PATIENTS.md) Section 8 for the full authorization matrix.
 
 ## 7. 401 vs. 403
 
@@ -187,14 +192,15 @@ full user-management API:
   authenticated user's own profile (`CurrentUserResponse`: `id`, `email`,
   `is_active`, `created_at`). Never returns `password_hash`.
 
-**No organization-scoped route exists yet** in this story (no CRUD API
-for `Organization`/`Facility` either — see
+**No CRUD API for `Organization`/`Facility` exists** (see
 [DOMAIN_MODEL.md](DOMAIN_MODEL.md)). `get_current_membership` and
-`require_roles` are fully implemented and tested
-(`tests/auth/test_dependencies.py`) by calling them directly, the same
-way `app.db.session.get_db_session` was built and tested in STORY-002
-before any route consumed it — they're ready for the first
-organization-scoped route a later story adds.
+`require_roles` were fully implemented and tested
+(`tests/auth/test_dependencies.py`) in STORY-004 by calling them
+directly, the same way `app.db.session.get_db_session` was built and
+tested in STORY-002 before any route consumed it — the patient API
+(STORY-005, `app/api/v1/endpoints/patients.py`) is the first
+organization-scoped route to actually depend on them. See
+[PATIENTS.md](PATIENTS.md) Section 8 for that authorization matrix.
 
 **Not implemented** (explicitly out of scope for this story): public
 registration, password reset, email verification, refresh tokens, MFA,
@@ -224,18 +230,30 @@ revocation store in this story. Concretely, this means:
   token's exposure window is bounded by this, not by any revocation
   capability.
 
-## 10. Patient Self-Access Direction (PLANNED)
+## 10. Patient Self-Access (CURRENT, STORY-005)
 
-Not implemented — there is no `Patient` entity yet
-([DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 12). Once one exists, a
-`PATIENT`-role membership is expected to be further constrained so that
-it can only reach records/workflows belonging to that specific patient
-(not merely "any record in the organization," which is roughly what
-`STAFF`/`ADMIN` access implies today). The exact mechanism (a
-patient-scoped authorization dependency layered on top of
-`get_current_membership`? a `patient_id` derived from the membership
-itself?) is an open design question for the story that introduces
-`Patient`, not decided here.
+Implemented via a dedicated route, `GET /api/v1/organizations/{organization_id}/patients/me`
+(`app/api/v1/endpoints/patients.py`), rather than a general-purpose
+patient-lookup route with an ownership check layered on top:
+
+- Requires only `get_current_user` + `get_current_membership` (any active
+  role) — NOT `require_roles(Role.PATIENT)`. It returns exclusively "the
+  `Patient` record where `Patient.user_id == <the caller's own User.id>`,
+  within this organization" (`app.services.patient.get_own_patient_record`),
+  so there is nothing an `ADMIN`/`STAFF` caller could gain by calling it;
+  by construction (Section 2; [PATIENTS.md](PATIENTS.md) Section 4)
+  they will simply get a 404, since patient linkage requires an active
+  `Role.PATIENT` membership.
+- A `PATIENT`-role membership cannot use `GET .../patients/{id}` (the
+  general lookup route) at all — that route requires `ADMIN`/`STAFF`
+  (`require_roles`). Knowing a patient UUID never grants access on its
+  own; a dedicated, id-less self-access route removes the entire class of
+  mistake a runtime "is this the caller's own record?" equality check
+  could introduce.
+
+See [PATIENTS.md](PATIENTS.md) Sections 8–10 and
+[adr/ADR-0005-patient-identity-and-access.md](adr/ADR-0005-patient-identity-and-access.md)
+for the full design and rationale.
 
 ## 11. Future Role/Permission Evolution (PLANNED)
 
@@ -251,16 +269,16 @@ story assumes it either.
 
 ## 12. Current vs. Planned
 
-**Current (this story):** `User`, `OrganizationMembership`, `Role`;
+**Current:** `User`, `OrganizationMembership`, `Role` (STORY-004);
 Argon2id password hashing; stateless JWT access tokens; `get_current_user`
 (401 on failure); `get_current_membership`/`require_roles`
 (403 on failure, DB-authoritative membership/role); `POST /auth/token`,
-`GET /auth/me`.
+`GET /auth/me`; `Patient` and patient self-access, wired into a real,
+RBAC-enforced route (STORY-005 — see [PATIENTS.md](PATIENTS.md)).
 
-**Explicitly not implemented in this story** (per STORY-004's scope —
-these belong to later stories): `Patient` and any self-access rules
-tied to it, `Department`, `Doctor`, `Appointment`, `Document`, any
-workflow engine, agents, LLM integration, refresh tokens, password
-reset, email verification, MFA, OAuth/social login, public registration,
-an audit-event system, and any CRUD API for `Organization`/`Facility`
-themselves.
+**Explicitly not implemented** (belong to later stories): `Department`,
+`Doctor`, `Appointment`, `Document`, any workflow engine, agents, LLM
+integration, refresh tokens, password reset, email verification, MFA,
+OAuth/social login, public registration, an audit-event system, patient
+update/delete, finer-grained permissions beyond `Role` (Section 11), and
+any CRUD API for `Organization`/`Facility` themselves.

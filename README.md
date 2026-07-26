@@ -39,8 +39,8 @@ or agent workflows exist.
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   [docs/DATABASE.md](docs/DATABASE.md),
   [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md),
-  [docs/RBAC.md](docs/RBAC.md), and the Architecture Decision Record
-  process ([docs/adr/](docs/adr/README.md))
+  [docs/RBAC.md](docs/RBAC.md), [docs/PATIENTS.md](docs/PATIENTS.md), and
+  the Architecture Decision Record process ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
 - **FastAPI backend application foundation** (`backend/app/`): an
   application factory with lifespan-managed resource cleanup, versioned
@@ -74,23 +74,36 @@ or agent workflows exist.
   membership/role from the database, never from the token. A minimal auth
   API exists: `POST /api/v1/auth/token`, `GET /api/v1/auth/me`. Backed by
   AgentCare's second Alembic migration, applied to and validated against
-  real PostgreSQL. See [docs/RBAC.md](docs/RBAC.md). No organization-scoped
-  route uses these dependencies yet — no such route exists.
+  real PostgreSQL. See [docs/RBAC.md](docs/RBAC.md).
+- **Patient domain, self-access & tenant-safe API**
+  (`backend/app/models/patient.py`, `backend/app/repositories/patient.py`,
+  `backend/app/services/patient.py`, `backend/app/api/v1/endpoints/patients.py`):
+  `Patient`, an ADMINISTRATIVE record (no clinical/medical data) belonging
+  to exactly one organization, with an optional, validated link to a
+  `User` portal identity. The first tenant-scoped repository (every
+  function requires an explicit `organization_id`) and the first service
+  to own a real mutating transaction. The first route to actually enforce
+  `get_current_membership`/`require_roles`: `ADMIN`/`STAFF` may
+  create/list/get patients; a `PATIENT`-role membership may reach only
+  its own linked record via a dedicated `GET .../patients/me`, never an
+  arbitrary id. Cross-tenant patient lookups return the same "not found"
+  response as a nonexistent id. Backed by AgentCare's third Alembic
+  migration, applied to and validated against real PostgreSQL. See
+  [docs/PATIENTS.md](docs/PATIENTS.md).
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app,
   real (SQLite-backed, for isolation) infrastructure-level database
-  behavior, and the `Organization`/`Facility`/`User`/`OrganizationMembership`
-  models, password hashing, JWT handling, and the auth API end-to-end
-  against real PostgreSQL
+  behavior, the `Organization`/`Facility`/`User`/`OrganizationMembership`/
+  `Patient` models, password hashing, JWT handling, the auth API, and the
+  full patient repository/service/API layers end-to-end against real
+  PostgreSQL
 
 **Not yet implemented** (planned, across future stories):
 - A CRUD API, service, and repository layer for `Organization`/`Facility`
-- Further domain models below the tenant hierarchy (patients,
-  appointments, referrals, staff, documents, etc.), including patient
-  self-access authorization rules
-- Any organization-scoped route that actually depends on
-  `get_current_membership`/`require_roles`; finer-grained permissions
-  beyond `Role`; refresh tokens; token revocation; password reset; email
-  verification; MFA; OAuth/social login; public user registration
+- Further domain models below the tenant hierarchy (appointments,
+  referrals, staff, documents, etc.)
+- Patient update/delete; finer-grained permissions beyond `Role`; refresh
+  tokens; token revocation; password reset; email verification; MFA;
+  OAuth/social login; public user registration
 - LangGraph-based agent workflows
 - LLM provider abstraction (Groq / OpenAI / Anthropic)
 - Next.js frontend
@@ -136,23 +149,24 @@ recommendation, or any function that constitutes the practice of medicine.
 |---|---|---|
 | Backend API | Python, FastAPI | Implemented |
 | Configuration | Pydantic Settings | Implemented |
-| Database | PostgreSQL | Implemented (4 tables — see below) |
-| ORM | SQLAlchemy 2.x | Implemented (`Organization`, `Facility`, `User`, `OrganizationMembership`) |
-| Migrations | Alembic | Implemented (2 migrations, validated against real PostgreSQL) |
+| Database | PostgreSQL | Implemented (5 tables — see below) |
+| ORM | SQLAlchemy 2.x | Implemented (`Organization`, `Facility`, `User`, `OrganizationMembership`, `Patient`) |
+| Migrations | Alembic | Implemented (3 migrations, validated against real PostgreSQL) |
 | Authentication | Argon2id password hashing + JWT (PyJWT) | Implemented (`POST /auth/token`, `GET /auth/me`) |
-| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented (primitives only — not yet wired to any route) |
+| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient API |
+| Repository/Service layers | `app/repositories/`, `app/services/` | Implemented for `Patient`; not yet for `Organization`/`Facility` |
 | Agent Orchestration | LangGraph | Planned |
 | LLM Access | Provider-abstracted (Groq / OpenAI / Anthropic) | Planned |
 | Frontend | Next.js | Planned |
 | Containerization | Docker | Planned |
 
 The database layer is implemented and tested, but scoped narrowly:
-`organizations`, `facilities`, `users`, and `organization_memberships`
-are the only tables that exist, there is no CRUD API for
+`organizations`, `facilities`, `users`, `organization_memberships`, and
+`patients` are the only tables that exist, there is no CRUD API for
 `Organization`/`Facility`, and no further healthcare domain model
-(patients, appointments, etc.) exists yet — see
-[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) and
-[docs/RBAC.md](docs/RBAC.md).
+(appointments, etc.) exists yet — see
+[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md), [docs/RBAC.md](docs/RBAC.md),
+and [docs/PATIENTS.md](docs/PATIENTS.md).
 
 ## Repository Structure
 
@@ -161,13 +175,15 @@ agentcare/
 ├── backend/             # FastAPI application foundation
 │   ├── app/
 │   │   ├── main.py       # Application factory (+ lifespan): create_app()
-│   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready/auth)
+│   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready/auth/patients)
 │   │   ├── auth/          # Password hashing, JWT, auth service, auth dependencies
 │   │   ├── core/         # Settings, logging, exceptions
 │   │   ├── db/            # Async SQLAlchemy engine/session, DB health check
-│   │   ├── models/         # Organization, Facility, User, OrganizationMembership
-│   │   └── schemas/      # Shared Pydantic schemas (errors, health, auth)
-│   ├── migrations/        # Alembic migrations (organizations+facilities; users+memberships)
+│   │   ├── models/         # Organization, Facility, User, OrganizationMembership, Patient
+│   │   ├── repositories/   # Patient (tenant-scoped persistence/query only)
+│   │   ├── services/       # PatientService (business rules + transaction ownership)
+│   │   └── schemas/      # Shared Pydantic schemas (errors, health, auth, patient)
+│   ├── migrations/        # Alembic migrations (organizations+facilities; users+memberships; patients)
 │   ├── alembic.ini
 │   ├── tests/            # Backend test suite
 │   └── pyproject.toml    # Backend dependencies + tool configuration
@@ -177,6 +193,7 @@ agentcare/
 │   ├── DATABASE.md        # Database foundation: engine, sessions, migrations
 │   ├── DOMAIN_MODEL.md    # Domain model, tenant hierarchy, identity
 │   ├── RBAC.md            # Identity, authentication, authorization model
+│   ├── PATIENTS.md        # Administrative patient domain, tenant ownership, self-access
 │   └── adr/              # Architecture Decision Records
 ├── infrastructure/      # Deployment/infra config (not yet implemented)
 ├── scripts/             # Developer/operational scripts (not yet implemented)
@@ -234,14 +251,15 @@ alembic current                   # show current DB revision
 ```
 
 `alembic upgrade head` creates the `organizations`/`facilities` tables
-(AgentCare's tenant hierarchy) and the `users`/`organization_memberships`
+(AgentCare's tenant hierarchy), the `users`/`organization_memberships`
 tables (identity and role-based membership — see
 [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) and
-[docs/RBAC.md](docs/RBAC.md)). See [docs/DATABASE.md](docs/DATABASE.md)
-for the full migration workflow and testing strategy (SQLite is used only
-for isolated infrastructure-level tests; PostgreSQL remains the
-production database and is what the domain model and auth test suites run
-against).
+[docs/RBAC.md](docs/RBAC.md)), and the `patients` table (administrative
+patient records — see [docs/PATIENTS.md](docs/PATIENTS.md)). See
+[docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow and
+testing strategy (SQLite is used only for isolated infrastructure-level
+tests; PostgreSQL remains the production database and is what the domain
+model, auth, and patient test suites run against).
 
 Run the test suite and quality checks from `backend/`:
 

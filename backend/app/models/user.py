@@ -23,6 +23,7 @@ from app.db.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.membership import OrganizationMembership
+    from app.models.patient import Patient
 
 
 def normalize_email(email: str) -> str:
@@ -63,6 +64,15 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # memberships. The FK (`organization_memberships.user_id`, ON DELETE
     # RESTRICT) is the actual enforcement point.
     memberships: Mapped[list[OrganizationMembership]] = relationship(
+        back_populates="user",
+        passive_deletes=True,
+    )
+
+    # A User may be linked (Patient.user_id) from at most one Patient per
+    # organization, but from multiple Patient rows across DIFFERENT
+    # organizations (see app/models/patient.py) — hence a list here, same
+    # shape as `memberships` above, not a single optional reference.
+    patients: Mapped[list[Patient]] = relationship(
         back_populates="user",
         passive_deletes=True,
     )

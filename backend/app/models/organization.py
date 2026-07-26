@@ -20,6 +20,7 @@ from app.db.types import enum_values
 if TYPE_CHECKING:
     from app.models.facility import Facility
     from app.models.membership import OrganizationMembership
+    from app.models.patient import Patient
 
 
 class OrganizationType(StrEnum):
@@ -93,6 +94,16 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # (`organization_memberships.organization_id`, ON DELETE RESTRICT —
     # see app/models/membership.py) is the actual enforcement point.
     memberships: Mapped[list[OrganizationMembership]] = relationship(
+        back_populates="organization",
+        passive_deletes=True,
+    )
+
+    # Same no-delete-cascade rationale as `facilities`/`memberships` above,
+    # applied to patient records: an ORM `session.delete(org)` must never
+    # silently cascade-delete patients. The FK (`patients.organization_id`,
+    # ON DELETE RESTRICT — see app/models/patient.py) is the actual
+    # enforcement point.
+    patients: Mapped[list[Patient]] = relationship(
         back_populates="organization",
         passive_deletes=True,
     )

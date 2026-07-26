@@ -1,18 +1,21 @@
 # AgentCare Database
 
 This document describes the database foundation implemented in STORY-002,
-extended in STORY-003 (the first real domain tables and migration), and
-further extended in STORY-004 (identity/membership tables and a second
-migration) — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself
-and [RBAC.md](RBAC.md) for the identity/authorization model these tables
-back. It follows the same CURRENT vs. PLANNED discipline as
+extended in STORY-003 (the first real domain tables and migration),
+STORY-004 (identity/membership tables and a second migration), and
+STORY-005 (the `patients` table and a third migration) — see
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself,
+[RBAC.md](RBAC.md) for the identity/authorization model, and
+[PATIENTS.md](PATIENTS.md) for the patient domain these tables back. It
+follows the same CURRENT vs. PLANNED discipline as
 [ARCHITECTURE.md](ARCHITECTURE.md): everything described here as
 implemented exists in the repository today; anything marked PLANNED does
 not yet.
 
-Four domain tables exist so far: `organizations`, `facilities`, `users`,
-and `organization_memberships` — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md).
-No other healthcare domain tables exist yet.
+Five domain tables exist so far: `organizations`, `facilities`, `users`,
+`organization_memberships`, and `patients` — see
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md). No other healthcare domain tables
+exist yet.
 
 ## 1. PostgreSQL as Production System of Record
 
@@ -32,18 +35,21 @@ The ORM/Core layer is SQLAlchemy 2.x, using its modern declarative style:
   before the first migration, so Alembic autogenerate diffs against
   predictable names.
 - `app/models/organization.py` and `app/models/facility.py` (STORY-003),
-  and `app/models/user.py` and `app/models/membership.py` (STORY-004),
-  are the real `Mapped[...]`-typed model classes — SQLAlchemy 2.x's
-  native typed mapping (`Mapped[str]`, `mapped_column(...)`), not the
-  legacy 1.x style. See [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the models
-  themselves and `app/db/mixins.py` for the shared `UUIDPrimaryKeyMixin`/
-  `TimestampMixin` they're built on.
+  `app/models/user.py` and `app/models/membership.py` (STORY-004), and
+  `app/models/patient.py` (STORY-005) are the real `Mapped[...]`-typed
+  model classes — SQLAlchemy 2.x's native typed mapping (`Mapped[str]`,
+  `mapped_column(...)`), not the legacy 1.x style. See
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the models themselves and
+  `app/db/mixins.py` for the shared `UUIDPrimaryKeyMixin`/`TimestampMixin`
+  they're built on.
 - Enum-backed columns (`OrganizationType`, `FacilityType`, and — as of
   STORY-004 — `Role` on `OrganizationMembership`) use SQLAlchemy's `Enum`
   type with `native_enum=False` (VARCHAR + a real `CHECK` constraint, not
   a native PostgreSQL `ENUM` type) and `values_callable` (persist each
   member's lowercase `.value`, not its uppercase Python name) — see
-  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 9 for the full rationale.
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 10 for the full rationale.
+  `Patient` (STORY-005) introduces no new enum — see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 6.
 
 ## 3. asyncpg
 
@@ -67,10 +73,10 @@ handling (see ADR-0002 for the rationale versus a synchronous driver).
   not call it.
 - `get_sessionmaker()` returns a cached `async_sessionmaker[AsyncSession]`
   bound to that engine.
-- `get_db_session()` is the FastAPI dependency shape future routes will
-  use: it creates a session, `yield`s it, and closes it via `async with`.
-  No route currently depends on it (no domain endpoints exist yet), but it
-  exists and is tested so later stories can adopt it directly.
+- `get_db_session()` is the FastAPI dependency every domain route uses:
+  it creates a session, `yield`s it, and closes it via `async with`. As
+  of STORY-005 it is consumed by the patient endpoints
+  (`app/api/v1/endpoints/patients.py`), the first real routes to do so.
 - `dispose_engine()` disposes the engine's connection pool if one was ever
   created, and is a safe no-op otherwise. It's called from the FastAPI
   `lifespan` handler in `app/main.py` on shutdown.
@@ -83,16 +89,27 @@ is in use propagates to the caller unmodified.
 
 This is deliberate (see ADR-0002): once services and, later, multi-step
 agent workflows exist, an implicitly auto-committing session per request
-would make partial-failure behavior surprising. Instead:
+would make partial-failure behavior surprising.
 
-- **Repositories** (PLANNED, not implemented) will perform persistence
-  operations but will not arbitrarily commit business transactions.
-- **Services/workflows** (PLANNED, not implemented) will own the
-  transaction boundary explicitly — deciding when a unit of work commits
-  or rolls back, potentially spanning multiple repository calls.
+**Realized as of STORY-005** (`app/repositories/patient.py`,
+`app/services/patient.py` — see [PATIENTS.md](PATIENTS.md) Section 6):
 
-This story does not implement repositories or services; it only
-establishes the session dependency they will eventually use.
+- **Repositories** perform persistence operations (`add`/`flush`/`query`
+  only) but never arbitrarily commit business transactions —
+  `app.repositories.patient.create()` adds and flushes, and nothing more.
+- **Services** own the transaction boundary explicitly —
+  `PatientService.create_patient` commits once every validation check has
+  passed, and commits nothing at all if a check fails first (nothing was
+  ever staged, so there's no partial state to roll back). Read operations
+  (`get_patient`/`list_patients`/`get_own_patient_record`) never commit.
+  Multi-step agent workflows, when they exist, are expected to follow the
+  same principle: the workflow/service layer decides commit/rollback,
+  never the repository.
+
+This is now demonstrated end-to-end for one resource (`Patient`); every
+future mutating domain operation is expected to follow the same
+`Route -> Service -> Repository -> Session` shape rather than reverting
+to ad hoc commits inside a route or repository.
 
 ## 6. Engine Lifecycle
 
@@ -208,6 +225,21 @@ Alembic is configured under `backend/` (`backend/alembic.ini`,
   `organizations`/`facilities` data confirmed untouched), and re-applied
   cleanly. Contains no seeded users, passwords, or credentials of any
   kind — only schema DDL.
+- **Third migration (STORY-005)**: `2037af2600c4_create_patients_table.py`
+  (`down_revision = "445bcf7d22b9"`) creates `patients` (`organization_id`
+  FK `ondelete="RESTRICT"`, nullable `user_id` FK `ondelete="RESTRICT"`,
+  `patient_number`/`first_name`/`last_name`/`date_of_birth`/`is_active`,
+  `UNIQUE(organization_id, patient_number)`,
+  `UNIQUE(organization_id, user_id)`, indexes on both FK columns) — see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 6 and
+  [PATIENTS.md](PATIENTS.md) for the schema itself. Same review/reformat
+  discipline as the prior two migrations. Validated against real
+  PostgreSQL: applied, inspected (columns, constraints, indexes,
+  including a direct proof that two `NULL`-`user_id` patients are allowed
+  in the same organization), downgraded one step (with
+  `organizations`/`facilities`/`users`/`organization_memberships` data
+  confirmed untouched), and re-applied cleanly. Contains no seeded
+  patients or credentials of any kind — only schema DDL.
 
 ## 9. Migration Commands
 
@@ -293,16 +325,16 @@ DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentca
   day-to-day (though it — and the domain model tests below — were run
   against a real local PostgreSQL 16 instance as part of STORY-003).
 - **Domain model tests** (`backend/tests/models/` — STORY-003, extended
-  STORY-004 with `test_user.py`/`test_membership.py`) run exclusively
-  against real PostgreSQL, same skip condition
-  (`AGENTCARE_TEST_POSTGRES_URL`), because nearly everything meaningful
-  about these models (uniqueness, composite unique constraints, FK
-  `ON DELETE RESTRICT`, enum `CHECK` constraints) is database-enforced
-  behavior SQLite doesn't replicate faithfully — see
-  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 10 and Section 12 below.
-  Each test runs inside a savepoint that's always rolled back
-  (`tests/conftest.py`), so no synthetic data persists in the shared
-  development database.
+  STORY-004 with `test_user.py`/`test_membership.py`, extended STORY-005
+  with `test_patient.py`) run exclusively against real PostgreSQL, same
+  skip condition (`AGENTCARE_TEST_POSTGRES_URL`), because nearly
+  everything meaningful about these models (uniqueness, composite unique
+  constraints including `NULL`-distinctness, FK `ON DELETE RESTRICT`,
+  enum `CHECK` constraints) is database-enforced behavior SQLite doesn't
+  replicate faithfully — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section
+  11 and Section 13. Each test runs inside a savepoint that's always
+  rolled back (`tests/conftest.py`), so no synthetic data persists in the
+  shared development database.
 - **Auth tests** (`backend/tests/auth/`, `backend/tests/api/test_auth_endpoints.py`
   — STORY-004) also run against real PostgreSQL under the same savepoint
   isolation: password hashing/verification, JWT creation/decoding,
@@ -313,9 +345,18 @@ DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentca
   `TestClient` dispatches requests through a separate anyio event-loop
   thread that cannot safely share the asyncpg connection the
   `db_session` fixture opens in the test's own event loop.
-- All STORY-001/002/003 tests continue to pass unmodified by STORY-004,
-  aside from two pre-existing tests whose environment fixtures needed a
-  synthetic `JWT_SECRET_KEY` added once the new
+- **Patient repository/service/API tests** (`backend/tests/repositories/`,
+  `backend/tests/services/`, `backend/tests/api/test_patient_endpoints.py`
+  — STORY-005) also run against real PostgreSQL under the same savepoint
+  isolation: tenant-scoped get/list, cross-tenant isolation, that
+  `app.repositories.patient.create()` flushes without committing,
+  `PatientService`'s business rules (patient-number conflict, all
+  user-linkage rejection reasons), and the full patient API authorization
+  matrix end-to-end (`httpx.AsyncClient`, same reasoning as the auth
+  tests above).
+- All prior stories' tests continue to pass unmodified by later stories,
+  aside from two pre-existing tests (STORY-004) whose environment
+  fixtures needed a synthetic `JWT_SECRET_KEY` added once the new
   staging/production-requires-a-JWT-secret validator (Section 10) landed
   (`tests/api/test_readiness_environment.py`) — a legitimate contract
   change, not a weakened test.

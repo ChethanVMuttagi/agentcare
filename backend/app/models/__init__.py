@@ -11,6 +11,7 @@ list of import comments in `migrations/env.py` itself.
 from app.models.facility import Facility, FacilityType
 from app.models.membership import OrganizationMembership, Role
 from app.models.organization import Organization, OrganizationType
+from app.models.patient import Patient
 from app.models.user import User
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "Organization",
     "OrganizationMembership",
     "OrganizationType",
+    "Patient",
     "Role",
     "User",
 ]

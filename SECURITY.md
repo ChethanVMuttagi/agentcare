@@ -92,6 +92,17 @@ statement that AgentCare is not a diagnosis or treatment system.
   it.
 - This applies to all environments reachable from this codebase, including
   local development and any public demo deployment.
+- As of STORY-005, `Patient` is a real, persisted model
+  (`app/models/patient.py` — see [docs/PATIENTS.md](docs/PATIENTS.md)).
+  It is deliberately **administrative only**: no diagnosis, symptoms,
+  medication, treatment, clinical notes, insurance, or emergency-triage
+  content exists anywhere in the model, and none may be added to it
+  without a fresh, explicit design decision (see
+  [docs/adr/ADR-0005-patient-identity-and-access.md](docs/adr/ADR-0005-patient-identity-and-access.md)).
+  Even the administrative fields it does have (name, date of birth,
+  organization-assigned patient number) are real PII once populated with
+  a real person's data — the synthetic-data requirement below applies to
+  them in full.
 
 ## 8. Synthetic / Anonymized Test Data Requirement
 
@@ -110,6 +121,11 @@ statement that AgentCare is not a diagnosis or treatment system.
   logging is implemented.
 - Debug logging that dumps full request bodies or environment variables is
   not permitted in code paths that could run against real data.
+- As of STORY-005, this explicitly includes never logging `PatientCreate`
+  request payloads or `PatientResponse`/`Patient` model contents (name,
+  date of birth, patient number) — `app/api/v1/endpoints/patients.py` and
+  `app/services/patient.py` do not log request/response bodies today, and
+  any future logging added to this path must continue to exclude them.
 
 ## 10. Medical Document Handling Considerations
 
