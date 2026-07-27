@@ -112,6 +112,17 @@ statement that AgentCare is not a diagnosis or treatment system.
   personal information (no email, phone, address). A practitioner's
   name is still real PII once populated with a real person's data — the
   synthetic-data requirement applies to it in full, same as `Patient`.
+- As of STORY-007, `Appointment` is also a real, persisted model
+  (`app/models/appointment.py` — see
+  [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md)). It is deliberately
+  administrative-only: `patient_id`/`practitioner_id`/`department_id`/
+  `start_at`/`end_at`/`status`/`cancellation_reason` — no diagnosis,
+  symptoms, medication, treatment, or clinical-note content exists
+  anywhere on it, and none may be added without a fresh, explicit design
+  decision. `cancellation_reason` specifically must remain a short
+  ADMINISTRATIVE reason only (e.g. "patient requested") — never
+  clinical content — see [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md)
+  Section 10.
 
 ## 8. Synthetic / Anonymized Test Data Requirement
 
@@ -139,6 +150,16 @@ statement that AgentCare is not a diagnosis or treatment system.
   request/response contents (names in particular) —
   `app/api/v1/endpoints/departments.py`, `practitioners.py`, and their
   services do not log request/response bodies today.
+- As of STORY-007, the same applies to `Appointment` request/response
+  contents — `app/api/v1/endpoints/appointments.py`,
+  `app/services/appointment.py`, and `app/services/availability_query.py`
+  do not log request/response bodies today. This includes never logging
+  a raw database exclusion-constraint violation's detail text (which
+  echoes back the conflicting `patient_id`/`practitioner_id`/time range)
+  — `AppointmentService` translates it into a generic
+  `AppointmentConflictError` message before it ever reaches a log
+  statement or an API response (see
+  [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md) Section 7).
 
 ## 10. Medical Document Handling Considerations
 

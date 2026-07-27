@@ -13,14 +13,16 @@ in this file.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_roles
 from app.db.session import get_db_session
 from app.models.membership import OrganizationMembership, Role
+from app.schemas.appointment import AvailableTimeSlotResponse, AvailableTimesResponse
 from app.schemas.availability import (
     AvailabilityCreate,
     AvailabilityListResponse,
@@ -33,12 +35,19 @@ from app.schemas.practitioner import (
     PractitionerResponse,
 )
 from app.services.availability import AvailabilityService
+from app.services.availability_query import (
+    MAX_APPOINTMENT_DURATION_MINUTES,
+    MIN_APPOINTMENT_DURATION_MINUTES,
+    AvailabilityQueryService,
+)
+from app.services.department import DepartmentService
 from app.services.practitioner import PractitionerService
 
 router = APIRouter(prefix="/organizations/{organization_id}/practitioners")
 
 _require_admin = require_roles(Role.ADMIN)
 _require_staff_access = require_roles(Role.ADMIN, Role.STAFF)
+_require_any_access = require_roles(Role.ADMIN, Role.STAFF, Role.PATIENT)
 
 
 @router.post("", response_model=PractitionerResponse, status_code=201)
@@ -169,4 +178,51 @@ async def list_availability(
     )
     return AvailabilityListResponse(
         availability=[AvailabilityResponse.model_validate(window) for window in windows]
+    )
+
+
+@router.get(
+    "/{practitioner_id}/available-times",
+    response_model=AvailableTimesResponse,
+)
+async def get_available_times(
+    organization_id: uuid.UUID,
+    practitioner_id: uuid.UUID,
+    department_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    _membership: Annotated[OrganizationMembership, Depends(_require_any_access)],
+    appointment_date: Annotated[date, Query(alias="date")],
+    duration_minutes: Annotated[
+        int, Query(ge=MIN_APPOINTMENT_DURATION_MINUTES, le=MAX_APPOINTMENT_DURATION_MINUTES)
+    ],
+) -> AvailableTimesResponse:
+    """Concrete, bookable candidate start times for one practitioner,
+    department, and calendar date. ADMIN/STAFF/PATIENT (patients may
+    discover safe availability to book — see docs/APPOINTMENTS.md
+    "RBAC"). 404s if the practitioner or department doesn't exist in this
+    organization; otherwise returns only free times — never why any other
+    time is unavailable, and never another patient's appointment details
+    (docs/APPOINTMENTS.md "Availability Privacy")."""
+    practitioner_service = PractitionerService(session)
+    await practitioner_service.get_practitioner(
+        organization_id=organization_id, practitioner_id=practitioner_id
+    )
+    department_service = DepartmentService(session)
+    await department_service.get_department(
+        organization_id=organization_id, department_id=department_id
+    )
+
+    availability_query_service = AvailabilityQueryService(session)
+    slots = await availability_query_service.list_available_times(
+        organization_id=organization_id,
+        practitioner_id=practitioner_id,
+        department_id=department_id,
+        on_date=appointment_date,
+        duration_minutes=duration_minutes,
+    )
+    return AvailableTimesResponse(
+        available_times=[
+            AvailableTimeSlotResponse(start_at=slot.start_at, end_at=slot.end_at)
+            for slot in slots
+        ]
     )

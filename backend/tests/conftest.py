@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import date, time
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.auth.security import hash_password
 from app.db.session import get_db_session
 from app.main import create_app
+from app.models.appointment import Appointment, AppointmentStatus
 from app.models.department import Department
 from app.models.facility import Facility, FacilityType
 from app.models.membership import OrganizationMembership, Role
@@ -371,5 +372,47 @@ def make_availability(
         db_session.add(availability)
         await db_session.flush()
         return availability
+
+    return _make
+
+
+@pytest.fixture()
+def make_appointment(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[Appointment]]:
+    """Factory for a synthetic, flushed (never committed) `Appointment`.
+
+    Does NOT validate tenant ownership, availability, or collision rules
+    itself (that is `app.services.appointment`'s job) — this is a raw
+    factory for model-level and repository-level tests. `start_at`
+    defaults to a fixed, always-future UTC instant so tests don't need to
+    reason about "now" unless they specifically want to.
+    """
+
+    async def _make(
+        organization: Organization,
+        patient: Patient,
+        practitioner: Practitioner,
+        department: Department,
+        *,
+        start_at: datetime | None = None,
+        duration_minutes: int = 30,
+        status: AppointmentStatus = AppointmentStatus.BOOKED,
+        cancellation_reason: str | None = None,
+    ) -> Appointment:
+        resolved_start = start_at or (datetime.now(UTC) + timedelta(days=30))
+        appointment = Appointment(
+            organization_id=organization.id,
+            patient_id=patient.id,
+            practitioner_id=practitioner.id,
+            department_id=department.id,
+            start_at=resolved_start,
+            end_at=resolved_start + timedelta(minutes=duration_minutes),
+            status=status,
+            cancellation_reason=cancellation_reason,
+        )
+        db_session.add(appointment)
+        await db_session.flush()
+        return appointment
 
     return _make

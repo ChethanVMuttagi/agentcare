@@ -62,6 +62,35 @@ async def list_active_by_practitioner_department_day(
     return result.scalars().all()
 
 
+async def list_active_by_practitioner_department(
+    session: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    practitioner_id: uuid.UUID,
+    department_id: uuid.UUID,
+) -> Sequence[PractitionerAvailability]:
+    """Return ALL active availability windows for this practitioner/department
+    pairing, across every day of the week.
+
+    Used by `app.services.availability_query.AvailabilityQueryService` to
+    resolve which window(s) a concrete instant (`Appointment.start_at`)
+    falls into. Unlike `list_active_by_practitioner_department_day`, this
+    is NOT filtered to one `day_of_week` — the caller doesn't know a
+    single day upfront, because each window may carry its OWN IANA
+    timezone, and a UTC instant's local day-of-week depends on which
+    window's timezone it's converted into (see
+    `AvailabilityQueryService._window_local_bounds`)."""
+    result = await session.execute(
+        select(PractitionerAvailability).where(
+            PractitionerAvailability.organization_id == organization_id,
+            PractitionerAvailability.practitioner_id == practitioner_id,
+            PractitionerAvailability.department_id == department_id,
+            PractitionerAvailability.is_active.is_(True),
+        )
+    )
+    return result.scalars().all()
+
+
 async def create(
     session: AsyncSession, availability: PractitionerAvailability
 ) -> PractitionerAvailability:

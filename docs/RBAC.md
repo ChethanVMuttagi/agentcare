@@ -1,10 +1,11 @@
 # AgentCare Identity, Authentication & Authorization (RBAC)
 
 This document describes the identity, authentication, and authorization
-foundation implemented in STORY-004, and how STORY-005/006 put it to
+foundation implemented in STORY-004, and how STORY-005/006/007 put it to
 work against real domain resources (`Patient` — see
 [PATIENTS.md](PATIENTS.md); `Department`/`Practitioner`/availability —
-see [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)). It follows
+see [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md); `Appointment` —
+see [APPOINTMENTS.md](APPOINTMENTS.md)). It follows
 the same CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md):
 everything described here as implemented exists in the repository today;
 anything marked PLANNED does not yet.
@@ -284,12 +285,17 @@ Argon2id password hashing; stateless JWT access tokens; `get_current_user`
 `GET /auth/me`; `Patient` and patient self-access (STORY-005); `Department`,
 `Practitioner`, practitioner-department assignment, and recurring
 availability, all RBAC-enforced (STORY-006 — see
-[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)).
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)); `Appointment`
+booking, rescheduling, and cancellation, RBAC-enforced with patient
+self-service and server-derived (never client-trusted) patient identity
+(STORY-007 — see [APPOINTMENTS.md](APPOINTMENTS.md) Sections 15-16).
 
-**Explicitly not implemented** (belong to later stories): `Appointment`,
-appointment booking/rescheduling/cancellation, `Document`, any workflow
-engine, agents, LLM integration, refresh tokens, password reset, email
-verification, MFA, OAuth/social login, public registration, an
-audit-event system, patient update/delete, patient-readable scheduling
-discovery endpoints, finer-grained permissions beyond `Role` (Section 11),
-and any CRUD API for `Organization`/`Facility` themselves.
+**Explicitly not implemented** (belong to later stories): appointment
+completion workflow, `Document`, any workflow engine, agents, LLM
+integration, refresh tokens, password reset, email verification, MFA,
+OAuth/social login, public registration, an audit-event system, patient
+update/delete, general-purpose patient-readable department/practitioner
+discovery endpoints (as opposed to the available-times endpoint, which
+IS implemented — see [APPOINTMENTS.md](APPOINTMENTS.md)), finer-grained
+permissions beyond `Role` (Section 11), and any CRUD API for
+`Organization`/`Facility` themselves.

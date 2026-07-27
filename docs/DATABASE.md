@@ -3,22 +3,25 @@
 This document describes the database foundation implemented in STORY-002,
 extended in STORY-003 (the first real domain tables and migration),
 STORY-004 (identity/membership tables and a second migration),
-STORY-005 (the `patients` table and a third migration), and STORY-006
-(department/practitioner/availability tables and a fourth migration) —
-see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself,
+STORY-005 (the `patients` table and a third migration), STORY-006
+(department/practitioner/availability tables and a fourth migration),
+and STORY-007 (the `appointments` table, a fifth migration, and the
+`btree_gist` PostgreSQL extension) — see
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself,
 [RBAC.md](RBAC.md) for the identity/authorization model,
-[PATIENTS.md](PATIENTS.md) for the patient domain, and
+[PATIENTS.md](PATIENTS.md) for the patient domain,
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) for the scheduling-
-resource domain these tables back. It follows the same CURRENT vs.
-PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md): everything
-described here as implemented exists in the repository today; anything
-marked PLANNED does not yet.
+resource domain, and [APPOINTMENTS.md](APPOINTMENTS.md) for the
+appointment booking engine these tables back. It follows the same
+CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md):
+everything described here as implemented exists in the repository
+today; anything marked PLANNED does not yet.
 
-Nine domain tables exist so far: `organizations`, `facilities`, `users`,
+Ten domain tables exist so far: `organizations`, `facilities`, `users`,
 `organization_memberships`, `patients`, `departments`, `practitioners`,
-`practitioner_departments`, and `practitioner_availability` — see
-[DOMAIN_MODEL.md](DOMAIN_MODEL.md). No other healthcare domain tables
-exist yet.
+`practitioner_departments`, `practitioner_availability`, and
+`appointments` — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md). No other
+healthcare domain tables exist yet.
 
 ## 1. PostgreSQL as Production System of Record
 
@@ -39,33 +42,47 @@ The ORM/Core layer is SQLAlchemy 2.x, using its modern declarative style:
   predictable names.
 - `app/models/organization.py` and `app/models/facility.py` (STORY-003),
   `app/models/user.py` and `app/models/membership.py` (STORY-004),
-  `app/models/patient.py` (STORY-005), and `app/models/department.py`,
+  `app/models/patient.py` (STORY-005), `app/models/department.py`,
   `practitioner.py`, `practitioner_department.py`,
-  `practitioner_availability.py` (STORY-006) are the real
+  `practitioner_availability.py` (STORY-006), and
+  `app/models/appointment.py` (STORY-007) are the real
   `Mapped[...]`-typed model classes — SQLAlchemy 2.x's native typed
   mapping (`Mapped[str]`, `mapped_column(...)`), not the legacy 1.x
   style. See [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the models themselves
   and `app/db/mixins.py` for the shared `UUIDPrimaryKeyMixin`/
   `TimestampMixin` they're built on.
-- Enum-backed columns (`OrganizationType`, `FacilityType`, `Role`, and —
-  as of STORY-006 — `PractitionerType` and `DayOfWeek`) use SQLAlchemy's
-  `Enum` type with `native_enum=False` (VARCHAR + a real `CHECK`
-  constraint, not a native PostgreSQL `ENUM` type) and `values_callable`
-  (persist each member's lowercase `.value`, not its uppercase Python
-  name) — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 14 for the full
-  rationale. `Patient` (STORY-005) introduced no new enum.
-- **Composite foreign keys** (new in STORY-006): `Department`,
-  `PractitionerDepartment`, and `PractitionerAvailability` each hold a
+- Enum-backed columns (`OrganizationType`, `FacilityType`, `Role`,
+  `PractitionerType`, `DayOfWeek`, and — as of STORY-007 —
+  `AppointmentStatus`) use SQLAlchemy's `Enum` type with
+  `native_enum=False` (VARCHAR + a real `CHECK` constraint, not a native
+  PostgreSQL `ENUM` type) and `values_callable` (persist each member's
+  lowercase `.value`, not its uppercase Python name) — see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 14 for the full rationale.
+- **Composite foreign keys** (introduced in STORY-006, extended in
+  STORY-007): `Department`, `PractitionerDepartment`,
+  `PractitionerAvailability`, and (STORY-007) `Appointment` each hold a
   multi-column `ForeignKeyConstraint` (in addition to, or instead of,
   single-column ones) to enforce tenant/facility/assignment ownership
   integrity at the database level rather than relying solely on
   application checks — see
-  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Sections 4–5, 7 and
-  ADR-0006 for the full mechanism and rationale. This required adding a
-  composite `UNIQUE(organization_id, id)` constraint to `Facility`
-  (and, transitively, to `Department` and `Practitioner`) purely so a
-  composite FK has something valid to target — PostgreSQL requires the
-  referenced column set to be covered by a unique constraint or index.
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Sections 4–5, 7,
+  [APPOINTMENTS.md](APPOINTMENTS.md) Section 6, and ADR-0006/ADR-0007
+  for the full mechanism and rationale. This required adding a composite
+  `UNIQUE(organization_id, id)` constraint to `Facility` (and,
+  transitively, to `Department`, `Practitioner`, and — STORY-007 —
+  `Patient`) purely so a composite FK has something valid to target —
+  PostgreSQL requires the referenced column set to be covered by a
+  unique constraint or index.
+- **PostgreSQL `EXCLUDE` constraints** (new in STORY-007): `Appointment`
+  holds two GiST `EXCLUDE` constraints (via
+  `sqlalchemy.dialects.postgresql.ExcludeConstraint`, `using="gist"`) —
+  the first genuinely race-safe, database-enforced concurrency
+  constraint in this codebase, as opposed to a service-level pre-check.
+  Requires the `btree_gist` extension (provisioned via Alembic,
+  `CREATE EXTENSION IF NOT EXISTS btree_gist`) for GiST to support an
+  equality operator class on `uuid`. See
+  [APPOINTMENTS.md](APPOINTMENTS.md) Section 7 and
+  [adr/ADR-0007-appointment-concurrency.md](adr/ADR-0007-appointment-concurrency.md).
 
 ## 3. asyncpg
 
@@ -91,9 +108,10 @@ handling (see ADR-0002 for the rationale versus a synchronous driver).
   bound to that engine.
 - `get_db_session()` is the FastAPI dependency every domain route uses:
   it creates a session, `yield`s it, and closes it via `async with`. As
-  of STORY-005/006 it is consumed by the patient, department, and
-  practitioner endpoints (`app/api/v1/endpoints/patients.py`,
-  `departments.py`, `practitioners.py`).
+  of STORY-005/006/007 it is consumed by the patient, department,
+  practitioner, and appointment endpoints
+  (`app/api/v1/endpoints/patients.py`, `departments.py`,
+  `practitioners.py`, `appointments.py`).
 - `dispose_engine()` disposes the engine's connection pool if one was ever
   created, and is a safe no-op otherwise. It's called from the FastAPI
   `lifespan` handler in `app/main.py` on shutdown.
@@ -109,30 +127,40 @@ agent workflows exist, an implicitly auto-committing session per request
 would make partial-failure behavior surprising.
 
 **Realized as of STORY-005** (`app/repositories/patient.py`,
-`app/services/patient.py` — see [PATIENTS.md](PATIENTS.md) Section 6)
-**and reused unchanged in STORY-006**
+`app/services/patient.py` — see [PATIENTS.md](PATIENTS.md) Section 6),
+**reused unchanged in STORY-006**
 (`app/repositories/department.py`/`practitioner.py`/
 `practitioner_department.py`/`availability.py`,
 `app/services/department.py`/`practitioner.py`/`availability.py` — see
-[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 10):
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 10), **and
+again in STORY-007** (`app/repositories/appointment.py`,
+`app/services/appointment.py`/`availability_query.py` — see
+[APPOINTMENTS.md](APPOINTMENTS.md) Sections 12-13):
 
 - **Repositories** perform persistence operations (`add`/`flush`/`query`
   only) but never arbitrarily commit business transactions —
-  `app.repositories.patient.create()` (and its STORY-006 counterparts)
-  add and flush, and nothing more.
+  `app.repositories.patient.create()` (and its STORY-006/007
+  counterparts) add and flush, and nothing more.
 - **Services** own the transaction boundary explicitly —
   `PatientService.create_patient`, `DepartmentService.create_department`,
-  `PractitionerService.create_practitioner`/`assign_to_department`, and
-  `AvailabilityService.create_availability` each commit once every
-  validation check has passed, and commit nothing at all if a check
-  fails first (nothing was ever staged, so there's no partial state to
-  roll back). Read operations never commit. Multi-step agent workflows,
-  when they exist, are expected to follow the same principle: the
-  workflow/service layer decides commit/rollback, never the repository.
+  `PractitionerService.create_practitioner`/`assign_to_department`,
+  `AvailabilityService.create_availability`, and
+  `AppointmentService.book_appointment`/`reschedule_appointment`/
+  `cancel_appointment` each commit once every validation check has
+  passed, and commit nothing at all if a check fails first (nothing was
+  ever staged, so there's no partial state to roll back). `AppointmentService`
+  additionally handles the ONE case where a commit itself can fail after
+  passing every prior check — a database-level collision (see
+  [APPOINTMENTS.md](APPOINTMENTS.md) Section 7): it explicitly rolls back
+  before translating the error, rather than leaving the session in a
+  failed-transaction state. Read operations never commit. Multi-step
+  agent workflows, when they exist, are expected to follow the same
+  principle: the workflow/service layer decides commit/rollback, never
+  the repository.
 
-This is now demonstrated end-to-end across two independent domains
-(`Patient`; `Department`/`Practitioner`/availability); every future
-mutating domain operation is expected to follow the same
+This is now demonstrated end-to-end across three independent domains
+(`Patient`; `Department`/`Practitioner`/availability; `Appointment`);
+every future mutating domain operation is expected to follow the same
 `Route -> Service -> Repository -> Session` shape rather than reverting
 to ad hoc commits inside a route or repository.
 
@@ -288,6 +316,29 @@ Alembic is configured under `backend/` (`backend/alembic.ini`,
   all five prior tables' data confirmed untouched), and re-applied
   cleanly. Contains no seeded departments, practitioners, or credentials
   of any kind — only schema DDL.
+- **Fifth migration (STORY-007)**: `c6674a696c08_create_appointments_table.py`
+  (`down_revision = "6251a20d9632"`) creates the `appointments` table
+  (composite ownership FKs, the `start_at < end_at` `CHECK`, the
+  `appointment_status` `CHECK`, and the two GiST `EXCLUDE` constraints —
+  see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 15 and
+  [APPOINTMENTS.md](APPOINTMENTS.md) for the schema itself), first runs
+  `CREATE EXTENSION IF NOT EXISTS btree_gist` (required by the `EXCLUDE`
+  constraints — Section 2), and alters `patients` to add the composite
+  `uq_patients_organization_id_id` constraint (the same
+  "redundant-unique-key-for-a-composite-FK-to-target" technique as the
+  fourth migration's `facilities` alter, applied one level down — the
+  extension creation and this alter both had to be manually reordered
+  BEFORE `appointments`' `CREATE TABLE`, since Alembic's autogenerate
+  does not order operations around forward dependencies like this on its
+  own). Validated against real PostgreSQL: applied, inspected (columns,
+  all composite and simple FKs, `CHECK` constraints, both `EXCLUDE`
+  constraints via `\d appointments`, the `btree_gist` extension via
+  `\dx`), a direct raw-SQL smoke test proving the exclusion constraints
+  reject an overlapping practitioner/patient booking while allowing an
+  adjacent one and a cross-tenant patient FK mismatch is rejected,
+  downgraded one step (with all prior tables' data confirmed untouched,
+  and the extension dropped), and re-applied cleanly. Contains no
+  seeded appointments or credentials of any kind — only schema DDL.
 
 ## 9. Migration Commands
 
@@ -419,6 +470,23 @@ DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentca
   (including that adjacent windows are allowed and inactive windows
   don't block new ones), and the full department/practitioner/
   availability authorization matrices end-to-end.
+- **Appointment repository/service/API tests, and the mandatory real-
+  concurrency proof** (`backend/tests/repositories/test_appointment.py`,
+  `backend/tests/services/test_appointment.py`/`test_availability_query.py`,
+  `backend/tests/api/test_appointment_endpoints.py` — STORY-007) also run
+  against real PostgreSQL under the same savepoint isolation. Separately,
+  `backend/tests/db/test_appointment_concurrency.py` deliberately does
+  NOT use the shared savepoint-isolated `db_session` fixture — it opens
+  its own dedicated engine and TWO genuinely independent connections,
+  commits real (later explicitly deleted) synthetic setup data, and races
+  two concurrently-executing `AppointmentService.book_appointment()`
+  calls via `asyncio.gather`, asserting exactly one succeeds and the
+  other fails with `AppointmentConflictError` — for both the
+  practitioner-side and patient-side `EXCLUDE` constraint. This is the
+  one test in the suite that cannot be satisfied by savepoint isolation,
+  because the entire point is proving behavior across two SEPARATE,
+  concurrently-open transactions, which a single shared connection
+  cannot represent.
 - All prior stories' tests continue to pass unmodified by later stories,
   aside from two pre-existing tests (STORY-004) whose environment
   fixtures needed a synthetic `JWT_SECRET_KEY` added once the new
@@ -445,6 +513,18 @@ important not to over-trust it:
   domain model test suite, which deliberately does **not** use SQLite at
   all, precisely because constraint-level enforcement is exactly what's
   under test.
+- **`Appointment`'s GiST `EXCLUDE` constraints (STORY-007) have no SQLite
+  equivalent at all** — `sqlalchemy.dialects.postgresql.ExcludeConstraint`
+  is a PostgreSQL-specific construct with no generic-SQL fallback.
+  Importing `app.models.appointment` (and therefore `app.models`, and
+  therefore anything that imports the model package) never requires a
+  PostgreSQL connection — the constraint object is just Python metadata
+  until DDL is actually compiled against a real dialect — but no test in
+  this codebase ever runs `Base.metadata.create_all()` against SQLite for
+  the full domain model (Section 11's SQLite tests only exercise
+  `app.db.session`/`app.db.health` in isolation), so this never comes up
+  in practice. Genuine concurrency safety is provable ONLY against real
+  PostgreSQL — see `tests/db/test_appointment_concurrency.py`.
 
 ## 13. Secret Handling
 

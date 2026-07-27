@@ -71,6 +71,13 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "user_id",
             name="uq_patients_organization_id_user_id",
         ),
+        # Composite unique key (in addition to the plain PK on `id`) so
+        # `Appointment` (STORY-007) can hold a composite FK
+        # `(organization_id, patient_id) -> patients(organization_id, id)`
+        # — the same technique used for `facilities`/`departments`/
+        # `practitioners`. See app/models/appointment.py and
+        # docs/APPOINTMENTS.md.
+        UniqueConstraint("organization_id", "id", name="uq_patients_organization_id_id"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(

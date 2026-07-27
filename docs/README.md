@@ -6,16 +6,15 @@ documentation is not backfilled after the fact.
 
 ## Status
 
-As of STORY-006 (Department, Practitioner & Availability Foundation),
-this index, the [Architecture Decision Records](adr/README.md) process,
+As of STORY-007 (Appointment Booking Engine), this index, the
+[Architecture Decision Records](adr/README.md) process,
 [ARCHITECTURE.md](ARCHITECTURE.md), [DATABASE.md](DATABASE.md),
 [DOMAIN_MODEL.md](DOMAIN_MODEL.md), [RBAC.md](RBAC.md),
-[PATIENTS.md](PATIENTS.md), and
-[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) exist. The remaining
-documents listed below are **reserved and intentionally not yet
-created**. Each will be added when the story that needs it is
-implemented, so that documentation never describes functionality that
-doesn't exist yet.
+[PATIENTS.md](PATIENTS.md), [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md),
+and [APPOINTMENTS.md](APPOINTMENTS.md) exist. The remaining documents
+listed below are **reserved and intentionally not yet created**. Each
+will be added when the story that needs it is implemented, so that
+documentation never describes functionality that doesn't exist yet.
 
 ## Planned Documents
 
@@ -39,12 +38,14 @@ doesn't exist yet.
 
 `RBAC.md` (identity, authentication, and authorization model) was
 implemented in STORY-004, `PATIENTS.md` (administrative patient domain,
-tenant ownership, self-access) in STORY-005, and
+tenant ownership, self-access) in STORY-005,
 `SCHEDULING_RESOURCES.md` (department/practitioner/availability
-foundation) in STORY-006 — see [RBAC.md](RBAC.md),
-[PATIENTS.md](PATIENTS.md), and
-[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) directly rather than
-the table above.
+foundation) in STORY-006, and `APPOINTMENTS.md` (appointment booking,
+rescheduling, cancellation, and genuinely race-safe double-booking
+prevention) in STORY-007 — see [RBAC.md](RBAC.md),
+[PATIENTS.md](PATIENTS.md), [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md),
+and [APPOINTMENTS.md](APPOINTMENTS.md) directly rather than the table
+above.
 
 ## Documentation Principles
 

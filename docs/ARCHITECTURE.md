@@ -1,21 +1,23 @@
 # AgentCare Architecture
 
-This document describes AgentCare's backend architecture as of STORY-006
-(Department, Practitioner & Availability Foundation), building on
-STORY-005 (Patient Domain, Self-Access & Tenant-Safe API), STORY-004
-(Identity, Membership & RBAC Foundation), STORY-003 (Organization &
-Facility Tenancy Foundation), STORY-002 (PostgreSQL & Database
-Foundation), and STORY-001 (Architecture & Python Backend Foundation). It
-clearly separates **CURRENT** (what exists in the repository today) from
-**PLANNED** (direction only — not implemented). See
-[README.md](../README.md) for the same distinction applied to the
-project as a whole, [DATABASE.md](DATABASE.md) for the full
-database-layer detail, [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the domain
-model itself, [RBAC.md](RBAC.md) for the full identity/authentication/
-authorization model, [PATIENTS.md](PATIENTS.md) for the patient domain,
-and [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) for the
-department/practitioner/availability domain this story adds — this
-document only summarizes all five.
+This document describes AgentCare's backend architecture as of STORY-007
+(Appointment Booking Engine), building on STORY-006 (Department,
+Practitioner & Availability Foundation), STORY-005 (Patient Domain,
+Self-Access & Tenant-Safe API), STORY-004 (Identity, Membership & RBAC
+Foundation), STORY-003 (Organization & Facility Tenancy Foundation),
+STORY-002 (PostgreSQL & Database Foundation), and STORY-001
+(Architecture & Python Backend Foundation). It clearly separates
+**CURRENT** (what exists in the repository today) from **PLANNED**
+(direction only — not implemented). See [README.md](../README.md) for
+the same distinction applied to the project as a whole,
+[DATABASE.md](DATABASE.md) for the full database-layer detail,
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the domain model itself,
+[RBAC.md](RBAC.md) for the full identity/authentication/authorization
+model, [PATIENTS.md](PATIENTS.md) for the patient domain,
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) for the
+department/practitioner/availability domain, and
+[APPOINTMENTS.md](APPOINTMENTS.md) for the appointment booking engine
+this story adds — this document only summarizes all six.
 
 ## 1. Architectural Principles
 
@@ -34,7 +36,7 @@ document only summarizes all five.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001 through STORY-006)
+## 2. Current Architecture (STORY-001 through STORY-007)
 
 The backend is a single Python package (`backend/app/`) — a **modular
 monolith**:
@@ -171,6 +173,20 @@ What exists today:
   the DATABASE level via composite foreign keys (not just application
   validation) — see [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)
   and ADR-0006. This story does not implement appointments.
+- **The appointment booking engine** (`app/models/appointment.py`, its
+  repository/services, `app/api/v1/endpoints/appointments.py` — plus a
+  new `available-times` route on the existing `practitioners.py` router
+  — STORY-007): `Appointment` — a concrete, dated booking of a `Patient`
+  against a `Practitioner`'s recurring availability, within a
+  `Department`. Recurring availability is converted into concrete UTC
+  bookable times on demand (`AvailabilityQueryService`), never
+  materialized. Double-booking (both practitioner-side and
+  patient-side) is prevented at the DATABASE level via genuinely
+  race-safe PostgreSQL `EXCLUDE` constraints (`btree_gist`) — proven
+  under real, concurrently-executing transactions, not a
+  SELECT-then-INSERT pre-check — see
+  [APPOINTMENTS.md](APPOINTMENTS.md) and
+  [adr/ADR-0007-appointment-concurrency.md](adr/ADR-0007-appointment-concurrency.md).
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data — this
   now explicitly includes never logging `JWT_SECRET_KEY`, issued tokens,
@@ -191,12 +207,14 @@ What exists today:
 What does **not** exist yet: a repository or service layer for
 `Organization`/`Facility` themselves; any entity beyond `Organization`/
 `Facility`/`User`/`OrganizationMembership`/`Patient`/`Department`/
-`Practitioner`/`PractitionerDepartment`/`PractitionerAvailability`; any
-CRUD API for `Organization`/`Facility`; patient update/delete;
-`Appointment` or any booking/rescheduling/cancellation flow; a
-race-proof (database exclusion constraint) availability-overlap check;
-patient-readable scheduling discovery endpoints; any LLM call; any
-agent; any frontend; public user registration; password reset; email
+`Practitioner`/`PractitionerDepartment`/`PractitionerAvailability`/
+`Appointment`; any CRUD API for `Organization`/`Facility`; patient
+update/delete; an appointment completion workflow; a race-proof
+(database exclusion constraint) AVAILABILITY-WINDOW-overlap check (as
+opposed to the appointment-overlap check, which IS race-proof — see
+[APPOINTMENTS.md](APPOINTMENTS.md)); general-purpose patient-readable
+department/practitioner discovery endpoints; any LLM call; any agent;
+any frontend; public user registration; password reset; email
 verification; refresh tokens; or MFA.
 
 ## 3. Planned Architecture (NOT Implemented)
@@ -210,20 +228,26 @@ Everything in this section is direction, not current behavior.
   own (only the minimal `app/repositories/facility.py` read used by
   `DepartmentService`'s ownership check); STORY-003 established
   persistence only.
-- **`Appointment` and appointment-slot materialization** — `Department`,
-  `Practitioner`, `PractitionerDepartment`, and
-  `PractitionerAvailability` (STORY-006) are the foundation a future
-  booking story will consume; booking, rescheduling, cancellation, and
-  waitlists don't exist yet — see
-  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 16.
-- **Race-proof availability-overlap prevention** (a PostgreSQL exclusion
-  constraint) — the current check is a documented, non-race-proof
-  service-level pre-check — see
-  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 9.
-- **Patient-readable scheduling discovery** (departments/practitioners/
-  availability search) — deliberately deferred until a concrete
-  booking-flow need defines the safe projection — see
-  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 12.
+- **Appointment waitlists and a completion/clinical-encounter workflow**
+  — `Appointment` (STORY-007) implements booking, rescheduling, and
+  cancellation only; `completed` is a modeled status with no reachable
+  transition yet — see [APPOINTMENTS.md](APPOINTMENTS.md) Section 11.
+- **Race-proof AVAILABILITY-WINDOW-overlap prevention** (a PostgreSQL
+  exclusion constraint on `practitioner_availability` itself) — the
+  current check for creating two overlapping recurring windows is still
+  a documented, non-race-proof service-level pre-check; this is
+  DIFFERENT from appointment-overlap prevention, which STORY-007 DID
+  make race-safe via `EXCLUDE` constraints — see
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 9 and
+  [APPOINTMENTS.md](APPOINTMENTS.md) Section 7.
+- **General-purpose patient-readable scheduling discovery** (e.g. "list
+  all Cardiology practitioners") — STORY-007 added a patient-readable
+  available-TIMES endpoint for a specific, already-known
+  practitioner/department (`GET .../available-times`,
+  [APPOINTMENTS.md](APPOINTMENTS.md)), but browsing/searching
+  departments or practitioners themselves as a patient still doesn't
+  exist — see [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)
+  Section 12.
 - **Further healthcare domain models** below the tenant hierarchy
   (referrals, staff profiles, documents, etc.), as SQLAlchemy 2.x
   `Mapped[...]` classes subclassing `app.db.base.Base` — see
@@ -262,13 +286,15 @@ Route (API layer)
 **`Route → Service → Repository → Database` is CURRENT as of STORY-005**,
 first proven for the patient domain (`app/api/v1/endpoints/patients.py`
 → `app.services.patient.PatientService` → `app.repositories.patient` →
-`AsyncSession`), **and reused unchanged for the scheduling-resource
-domain in STORY-006** (`departments.py`/`practitioners.py` →
+`AsyncSession`), **reused unchanged for the scheduling-resource domain in
+STORY-006** (`departments.py`/`practitioners.py` →
 `DepartmentService`/`PractitionerService`/`AvailabilityService` → their
-respective repositories) — now demonstrated across two independent
-domains, the pattern every future domain resource is expected to
-follow. `Workflow`/`Agent`/`Tool` remain PLANNED (Section 3) — no
-agentic coordination exists yet.
+respective repositories), **and again for the appointment booking engine
+in STORY-007** (`appointments.py` → `AppointmentService`/
+`AvailabilityQueryService` → `app.repositories.appointment`) — now
+demonstrated across three independent domains, the pattern every future
+domain resource is expected to follow. `Workflow`/`Agent`/`Tool` remain
+PLANNED (Section 3) — no agentic coordination exists yet.
 
 Routes stay thin: they parse/validate input, call a service, and shape the
 response. Services hold business rules AND own the transaction boundary
@@ -344,6 +370,21 @@ structural, not just a convention:
   `PractitionerResponse` exposes no private email, phone, address, or
   `User` linkage — none of those fields exist on the model in the first
   place (Section 13 of that document).
+- `Appointment` (STORY-007) holds administrative scheduling fields only
+  — same discipline as `Patient`/`Department`/`Practitioner`. Beyond
+  composite-FK tenant/assignment ownership, `Appointment` is the first
+  resource in this codebase with a genuine CONCURRENT-write correctness
+  requirement: two overlapping bookings for the same practitioner (or
+  the same patient) are prevented at the DATABASE level via PostgreSQL
+  `EXCLUDE` constraints, proven race-safe under real, independently-
+  executing concurrent transactions (`tests/db/test_appointment_concurrency.py`)
+  — not a service-level pre-check that could pass twice before either
+  side commits. A `PATIENT`-role caller's `patient_id` is always derived
+  server-side from their own linked `Patient` record and never trusted
+  from a request body, closing off any path to booking/viewing/
+  modifying another patient's appointment by supplying a different id.
+  See [APPOINTMENTS.md](APPOINTMENTS.md) and
+  [adr/ADR-0007-appointment-concurrency.md](adr/ADR-0007-appointment-concurrency.md).
 - The application must be able to start, and pass health checks, **without**
   any LLM API key or database connection configured. `DATABASE_URL` is
   optional at the configuration layer in every environment, and the real
@@ -462,6 +503,27 @@ tools will simply not expose clinical-decision capabilities.
   authorization matrices end-to-end (admin/staff/patient ×
   create/list/get/assign/availability, cross-tenant rejection at every
   level) — all against real PostgreSQL.
+- Coverage added in STORY-007: `Appointment` model tests including both
+  `EXCLUDE` constraints (practitioner and patient overlap rejection,
+  adjacent-slot acceptance, cancelled/completed status freeing a slot)
+  verified through the ORM and via raw SQL; a dedicated, MANDATORY
+  real-concurrency test (`tests/db/test_appointment_concurrency.py`)
+  launching two genuinely independent, concurrently-executing
+  transactions via `asyncio.gather` and asserting exactly one succeeds —
+  for both the practitioner-side and patient-side constraint;
+  `AvailabilityQueryService` tests (weekday matching, timezone
+  conversion including a concrete UTC-offset assertion, duration
+  fitting, slot interval, existing-appointment exclusion, cancelled-
+  appointment non-exclusion, inactive practitioner/department/
+  assignment); `AppointmentService` tests (booking validation order,
+  every rejection reason, sequential conflict translation, reschedule
+  including "failed reschedule leaves the original row unchanged,"
+  cancellation including rejected repeated cancellation); and the full
+  appointment/available-times API authorization matrix end-to-end
+  (admin/staff/patient × book/get/list/reschedule/cancel, patient
+  self-service with a supplied-but-ignored spoofed `patient_id`,
+  cross-tenant rejection at every level, organization-wide vs.
+  self-scoped listing) — all against real PostgreSQL.
 - Test values (e.g. a JWT secret used only to test that `SecretStr` masking
   works, or synthetic organization/facility/user/email/password/patient/
   practitioner values) are synthetic and clearly non-production.

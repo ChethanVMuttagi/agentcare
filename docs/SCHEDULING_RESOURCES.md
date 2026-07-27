@@ -10,10 +10,11 @@ PLANNED does not yet. See
 [adr/ADR-0006-scheduling-resources.md](adr/ADR-0006-scheduling-resources.md)
 for the decision record.
 
-**This story does NOT implement appointments.** It establishes the real,
+**This story does NOT implement appointments** — that is STORY-007, see
+[APPOINTMENTS.md](APPOINTMENTS.md). This story establishes the real,
 persisted resources — departments, practitioners, their assignments, and
-recurring availability windows — that a future appointment-booking story
-(and later agents) will query. See Section 15.
+recurring availability windows — that the appointment-booking engine
+(and later agents) query. See Section 15.
 
 ## 1. Administrative Scope (Healthcare Safety Boundary)
 
@@ -352,6 +353,15 @@ concrete need, would risk designing the wrong shape — see
 [adr/ADR-0006-scheduling-resources.md](adr/ADR-0006-scheduling-resources.md).
 This is an explicit, documented deferral, not accidental behavior.
 
+**Resolved in STORY-007**: `GET .../practitioners/{id}/available-times`
+is exactly the concrete, safe projection this deferral was waiting for —
+a `PATIENT` caller can discover bookable TIMES for a specific, already-
+known practitioner/department without any general-purpose "browse every
+practitioner" endpoint. See [APPOINTMENTS.md](APPOINTMENTS.md) Sections
+14-15 for the RBAC and privacy design. General-purpose department/
+practitioner discovery (e.g. "list all Cardiology practitioners") is
+still not implemented.
+
 ## 13. Safe Practitioner Response
 
 `PractitionerResponse` (`app/schemas/practitioner.py`) exposes only:
@@ -409,3 +419,14 @@ departments/practitioners/availability; race-proof (database exclusion
 constraint) overlap prevention; documents; `WorkflowRun`; any agent, LLM,
 or LangGraph integration; clinical routing/diagnosis/treatment/
 prescriptions of any kind; a frontend.
+
+**Implemented in STORY-007** (see [APPOINTMENTS.md](APPOINTMENTS.md)):
+`Appointment`, booking, rescheduling, cancellation; a patient-readable
+available-times discovery endpoint (a safe projection, not general
+department/practitioner browsing); and genuinely race-safe database
+exclusion-constraint overlap prevention — for `Appointment`, NOT for
+`PractitionerAvailability` itself, whose own overlap check (Section 9
+above) remains a non-race-proof service-level pre-check, unchanged by
+STORY-007. Still not implemented: appointment waitlists, documents,
+`WorkflowRun`, any agent/LLM/LangGraph integration, and clinical
+routing/diagnosis/treatment/prescriptions of any kind.
