@@ -43,6 +43,16 @@ from app.models.practitioner import Practitioner, PractitionerType
 from app.models.practitioner_availability import DayOfWeek, PractitionerAvailability
 from app.models.practitioner_department import PractitionerDepartment
 from app.models.user import User
+from app.models.workflow import (
+    ActorType,
+    StepStatus,
+    WorkflowEvent,
+    WorkflowEventType,
+    WorkflowRequestType,
+    WorkflowRun,
+    WorkflowStatus,
+    WorkflowStep,
+)
 from app.storage.factory import get_document_storage
 from app.storage.local import LocalDocumentStorage
 
@@ -503,5 +513,139 @@ def make_patient_document(
         db_session.add(document)
         await db_session.flush()
         return document
+
+    return _make
+
+
+@pytest.fixture()
+def make_workflow_run(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[WorkflowRun]]:
+    """Factory for a synthetic, flushed (never committed) `WorkflowRun`.
+
+    Does NOT validate initiator membership, patient ownership, or
+    transition rules itself (that is `app.services.workflow`'s job) —
+    this is a raw factory for model-level and repository-level tests.
+    `correlation_id` defaults to a fresh, unique, opaque value per call
+    (the same shape `WorkflowService._new_correlation_id` generates) so
+    tests don't collide on `UNIQUE(correlation_id)` unless deliberately
+    testing that.
+    """
+
+    async def _make(
+        organization: Organization,
+        initiated_by_user_id: uuid.UUID,
+        *,
+        patient: Patient | None = None,
+        request_type: WorkflowRequestType = WorkflowRequestType.APPOINTMENT_BOOKING,
+        status: WorkflowStatus = WorkflowStatus.PENDING,
+        correlation_id: str | None = None,
+        idempotency_key: str | None = None,
+        current_step: int | None = None,
+        failure_code: str | None = None,
+        failure_message_safe: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> WorkflowRun:
+        run = WorkflowRun(
+            organization_id=organization.id,
+            patient_id=patient.id if patient is not None else None,
+            initiated_by_user_id=initiated_by_user_id,
+            request_type=request_type,
+            status=status,
+            correlation_id=correlation_id or uuid.uuid4().hex,
+            idempotency_key=idempotency_key,
+            current_step=current_step,
+            failure_code=failure_code,
+            failure_message_safe=failure_message_safe,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        db_session.add(run)
+        await db_session.flush()
+        return run
+
+    return _make
+
+
+@pytest.fixture()
+def make_workflow_step(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[WorkflowStep]]:
+    """Factory for a synthetic, flushed (never committed) `WorkflowStep`.
+
+    Does NOT validate run status/transition rules itself — this is a raw
+    factory for model-level and repository-level tests.
+    """
+
+    async def _make(
+        organization: Organization,
+        workflow_run: WorkflowRun,
+        sequence_number: int,
+        *,
+        step_type: str = "synthetic_step",
+        status: StepStatus = StepStatus.PENDING,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
+        attempt_count: int = 0,
+        failure_code: str | None = None,
+        failure_message_safe: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> WorkflowStep:
+        step = WorkflowStep(
+            organization_id=organization.id,
+            workflow_run_id=workflow_run.id,
+            sequence_number=sequence_number,
+            step_type=step_type,
+            status=status,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            attempt_count=attempt_count,
+            failure_code=failure_code,
+            failure_message_safe=failure_message_safe,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        db_session.add(step)
+        await db_session.flush()
+        return step
+
+    return _make
+
+
+@pytest.fixture()
+def make_workflow_event(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[WorkflowEvent]]:
+    """Factory for a synthetic, flushed (never committed) `WorkflowEvent`.
+
+    Append-only in production (see `app.repositories.workflow_event`);
+    this raw factory exists only for model-level/repository-level test
+    setup, not to demonstrate a supported update path.
+    """
+
+    async def _make(
+        organization: Organization,
+        workflow_run: WorkflowRun,
+        *,
+        workflow_step: WorkflowStep | None = None,
+        event_type: WorkflowEventType = WorkflowEventType.WORKFLOW_CREATED,
+        actor_type: ActorType = ActorType.SYSTEM,
+        actor_identifier: str = "synthetic-actor",
+        safe_metadata: dict[str, object] | None = None,
+    ) -> WorkflowEvent:
+        event = WorkflowEvent(
+            organization_id=organization.id,
+            workflow_run_id=workflow_run.id,
+            workflow_step_id=workflow_step.id if workflow_step is not None else None,
+            event_type=event_type,
+            actor_type=actor_type,
+            actor_identifier=actor_identifier,
+            safe_metadata=safe_metadata,
+        )
+        db_session.add(event)
+        await db_session.flush()
+        return event
 
     return _make

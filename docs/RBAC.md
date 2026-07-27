@@ -292,13 +292,20 @@ self-service and server-derived (never client-trusted) patient identity
 (STORY-007 — see [APPOINTMENTS.md](APPOINTMENTS.md) Sections 15-16);
 `PatientDocument` upload/list/get/download, RBAC-enforced with the same
 server-derived patient identity, plus ADMIN/STAFF-only deletion
-(STORY-008 — see [DOCUMENTS.md](DOCUMENTS.md) Sections 15-16).
+(STORY-008 — see [DOCUMENTS.md](DOCUMENTS.md) Sections 15-16);
+`WorkflowRun` creation/list/get/steps/events, RBAC-enforced with the
+same server-derived patient identity, plus ADMIN/STAFF-only
+cancellation (STORY-009 — see [WORKFLOWS.md](WORKFLOWS.md) Sections
+20-21).
 
 **Explicitly not implemented** (belong to later stories): appointment
 completion workflow, malware scanning, a production document-storage
-backend, any workflow engine, agents, LLM integration, refresh tokens,
-password reset, email verification, MFA, OAuth/social login, public
-registration, an audit-event system, patient update/delete,
+backend, an LLM client, an agent framework, LangGraph, tool calling,
+autonomous workflow decision-making, refresh tokens, password reset,
+email verification, MFA, OAuth/social login, public registration, a
+general-purpose security/compliance audit-event system (distinct from
+`WorkflowEvent`'s own workflow-lifecycle audit trail — see
+[WORKFLOWS.md](WORKFLOWS.md) Section 18), patient update/delete,
 general-purpose patient-readable department/practitioner discovery
 endpoints (as opposed to the available-times endpoint, which IS
 implemented — see [APPOINTMENTS.md](APPOINTMENTS.md)), finer-grained

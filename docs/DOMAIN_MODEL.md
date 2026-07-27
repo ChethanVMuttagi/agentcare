@@ -1,13 +1,14 @@
 # AgentCare Domain Model
 
 This document describes AgentCare's domain persistence model as of
-STORY-008 (Secure Document Management), building on STORY-007
-(Appointment Booking Engine), STORY-006 (Department, Practitioner &
-Availability Foundation), STORY-005 (Patient Domain, Self-Access &
-Tenant-Safe API), STORY-004 (Identity, Membership & RBAC Foundation), and
-STORY-003 (Organization & Facility Tenancy Foundation). It follows the
-same CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md)
-and [DATABASE.md](DATABASE.md): everything described here as implemented
+STORY-009 (Persistent Workflow Engine & Audit Trail), building on
+STORY-008 (Secure Document Management), STORY-007 (Appointment Booking
+Engine), STORY-006 (Department, Practitioner & Availability Foundation),
+STORY-005 (Patient Domain, Self-Access & Tenant-Safe API), STORY-004
+(Identity, Membership & RBAC Foundation), and STORY-003 (Organization &
+Facility Tenancy Foundation). It follows the same CURRENT vs. PLANNED
+discipline as [ARCHITECTURE.md](ARCHITECTURE.md) and
+[DATABASE.md](DATABASE.md): everything described here as implemented
 exists in the repository and the database schema today; anything marked
 PLANNED does not yet.
 
@@ -18,13 +19,15 @@ API exists for identity (`POST /api/v1/auth/token`, `GET /api/v1/auth/me`
 `Practitioner`/availability (see
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)), for `Appointment`
 booking/rescheduling/cancellation (see
-[APPOINTMENTS.md](APPOINTMENTS.md)), and for `PatientDocument` upload/
-retrieval/deletion (see [DOCUMENTS.md](DOCUMENTS.md), the authoritative
-document for `PatientDocument`'s full schema, storage abstraction, and
-API — this document covers it only at the level of the rest of the
-domain model below). Routes/services/repositories for
-`Organization`/`Facility` themselves still don't exist; they come in a
-later story.
+[APPOINTMENTS.md](APPOINTMENTS.md)), for `PatientDocument` upload/
+retrieval/deletion (see [DOCUMENTS.md](DOCUMENTS.md)), and for
+`WorkflowRun` creation/inspection/cancellation (see
+[WORKFLOWS.md](WORKFLOWS.md), the authoritative document for
+`WorkflowRun`/`WorkflowStep`/`WorkflowEvent`'s full schema, state
+machines, concurrency strategy, and API — this document covers them only
+at the level of the rest of the domain model below, in Section 21).
+Routes/services/repositories for `Organization`/`Facility` themselves
+still don't exist; they come in a later story.
 
 ## 1. Tenant Hierarchy & Identity
 
@@ -770,20 +773,28 @@ booking, rescheduling, cancellation, and genuinely race-safe double-
 booking prevention (see [APPOINTMENTS.md](APPOINTMENTS.md));
 `PatientDocument` (STORY-008) — administrative document upload, storage
 abstraction, signature validation, and lifecycle management (see
-[DOCUMENTS.md](DOCUMENTS.md)).
+[DOCUMENTS.md](DOCUMENTS.md)); `WorkflowRun`, `WorkflowStep`,
+`WorkflowEvent` (STORY-009) — durable, race-safe workflow lifecycle
+state and an append-only audit trail, persistence and mechanics only
+(see [WORKFLOWS.md](WORKFLOWS.md) and Section 21).
 
 **Explicitly not implemented yet** (belong to later stories): patient
 update/delete, appointment completion workflow, waitlists, malware
-scanning, a production object-storage backend, `WorkflowRun`, any audit
-system, agents, tools, any clinical/medical data anywhere in the domain,
-and any CRUD API for `Organization`/`Facility` themselves. See
-[RBAC.md](RBAC.md) Section 12 for the identity/authorization-specific
-current-vs-planned breakdown, [PATIENTS.md](PATIENTS.md) Section 13 for
-the patient-domain-specific breakdown,
-[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 16 for the
-scheduling-resource-specific breakdown, [APPOINTMENTS.md](APPOINTMENTS.md)
-Section 21 for the appointment-specific breakdown, and
-[DOCUMENTS.md](DOCUMENTS.md) Section 23 for the document-specific
+scanning, a production object-storage backend, an LLM client, an agent
+framework, LangGraph, tool calling, autonomous workflow
+decision-making, a general-purpose security/compliance audit system
+(distinct from `WorkflowEvent`'s own workflow-lifecycle audit trail —
+see [WORKFLOWS.md](WORKFLOWS.md) Section 18), any clinical/medical data
+anywhere in the domain, and any CRUD API for `Organization`/`Facility`
+themselves. See [RBAC.md](RBAC.md) Section 12 for the
+identity/authorization-specific current-vs-planned breakdown,
+[PATIENTS.md](PATIENTS.md) Section 13 for the patient-domain-specific
+breakdown, [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 16
+for the scheduling-resource-specific breakdown,
+[APPOINTMENTS.md](APPOINTMENTS.md) Section 21 for the
+appointment-specific breakdown, [DOCUMENTS.md](DOCUMENTS.md) Section 23
+for the document-specific breakdown, and
+[WORKFLOWS.md](WORKFLOWS.md) Section 24 for the workflow-specific
 breakdown.
 
 ## 20. Planned Direction (NOT Implemented)
@@ -830,3 +841,37 @@ breakdown.
   stories as their own foundational work, not guessed at here.
 - Soft deletion, if ever needed, would be a deliberate future decision
   with its own ADR — not implied by `is_active` (Section 13).
+
+## 21. WorkflowRun, WorkflowStep, WorkflowEvent (STORY-009)
+
+`app/models/workflow.py` — tables `workflow_runs`, `workflow_steps`,
+`workflow_events`. [WORKFLOWS.md](WORKFLOWS.md) is the authoritative
+document for this domain — full column tables, the `WorkflowStatus`/
+`StepStatus` state machines, the `SELECT ... FOR UPDATE` concurrency
+strategy (proven under real concurrent transactions), transition+event
+atomicity, the actor model, correlation/idempotency strategy, the
+`safe_metadata`/failure-metadata content policy, the full RBAC matrix,
+and the healthcare-safety/no-chain-of-thought boundary. Summarized here
+at the same level as [DOCUMENTS.md](DOCUMENTS.md) is summarized above:
+
+- **`WorkflowRun`** belongs to exactly one `Organization`, optionally
+  references a `Patient` (composite FK, same-organization enforced) and
+  always references its `initiated_by_user_id` via a composite FK into
+  `organization_memberships` (existence, not activity — the same
+  existence-vs-activity split as `PatientDocument.uploaded_by_user_id`,
+  Section 13).
+- **`WorkflowStep`** belongs to exactly one `WorkflowRun` (composite FK,
+  same-organization enforced), with a caller-assigned `sequence_number`
+  unique within its run.
+- **`WorkflowEvent`** belongs to exactly one `WorkflowRun` and,
+  optionally, one `WorkflowStep` — enforced via a **3-column** composite
+  FK proving a linked step belongs to the SAME run, not merely the same
+  organization ([WORKFLOWS.md](WORKFLOWS.md) Section 6). Append-only:
+  its repository exposes no `update`/`delete` function.
+
+These three tables are the only ones in this domain enforcing a
+same-organization ownership chain THREE levels deep at the database
+level (`WorkflowEvent` → `WorkflowStep` → `WorkflowRun` →
+`Organization`), extending the composite-FK-ownership-integrity
+technique established in Section 7/9/10 one level further than any
+prior story needed.

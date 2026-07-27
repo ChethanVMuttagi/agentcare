@@ -6,27 +6,31 @@ STORY-004 (identity/membership tables and a second migration),
 STORY-005 (the `patients` table and a third migration), STORY-006
 (department/practitioner/availability tables and a fourth migration),
 STORY-007 (the `appointments` table, a fifth migration, and the
-`btree_gist` PostgreSQL extension), and STORY-008 (the
+`btree_gist` PostgreSQL extension), STORY-008 (the
 `patient_documents` table and a sixth migration — metadata only, no file
-bytes) — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself,
+bytes), and STORY-009 (the `workflow_runs`/`workflow_steps`/
+`workflow_events` tables and a seventh migration) — see
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself,
 [RBAC.md](RBAC.md) for the identity/authorization model,
 [PATIENTS.md](PATIENTS.md) for the patient domain,
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) for the scheduling-
 resource domain, [APPOINTMENTS.md](APPOINTMENTS.md) for the appointment
-booking engine, and [DOCUMENTS.md](DOCUMENTS.md) for the secure document
-management capability these tables back. It follows the same CURRENT
-vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md): everything
-described here as implemented exists in the repository today; anything
-marked PLANNED does not yet.
+booking engine, [DOCUMENTS.md](DOCUMENTS.md) for the secure document
+management capability, and [WORKFLOWS.md](WORKFLOWS.md) for the
+persistent workflow engine these tables back. It follows the same
+CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md):
+everything described here as implemented exists in the repository
+today; anything marked PLANNED does not yet.
 
-Eleven domain tables exist so far: `organizations`, `facilities`,
+Fourteen domain tables exist so far: `organizations`, `facilities`,
 `users`, `organization_memberships`, `patients`, `departments`,
 `practitioners`, `practitioner_departments`, `practitioner_availability`,
-`appointments`, and `patient_documents` — see
-[DOMAIN_MODEL.md](DOMAIN_MODEL.md). No other healthcare domain tables
-exist yet, and no table anywhere in this schema stores file bytes
-(`BLOB`/`bytea`) — `patient_documents` holds metadata and a storage
-reference only (see [DOCUMENTS.md](DOCUMENTS.md) Section 2).
+`appointments`, `patient_documents`, `workflow_runs`, `workflow_steps`,
+and `workflow_events` — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md). No other
+healthcare domain tables exist yet, and no table anywhere in this schema
+stores file bytes (`BLOB`/`bytea`) — `patient_documents` holds metadata
+and a storage reference only (see [DOCUMENTS.md](DOCUMENTS.md) Section
+2).
 
 ## 1. PostgreSQL as Production System of Record
 
@@ -371,6 +375,36 @@ Alembic is configured under `backend/` (`backend/alembic.ini`,
   rejected, downgraded one step (with all prior tables' data confirmed
   untouched), and re-applied cleanly. Contains no seeded documents,
   file bytes, or credentials of any kind — only schema DDL.
+- **Seventh migration (STORY-009)**: `291a26a9ce1b_create_workflow_runs_steps_and_events_.py`
+  (`down_revision = "f4702bbc0be1"`) creates `workflow_runs`,
+  `workflow_steps`, and `workflow_events` in dependency order — composite
+  ownership FKs (`organization_id`+`patient_id` against `patients`,
+  `organization_id`+`initiated_by_user_id` against
+  `organization_memberships`, `organization_id`+`workflow_run_id`
+  against `workflow_runs`, and a 3-column
+  `organization_id`+`workflow_run_id`+`workflow_step_id` against
+  `workflow_steps`), the `workflow_request_type`/`workflow_status`/
+  `workflow_step_status`/`workflow_event_type`/`workflow_actor_type`
+  `CHECK` constraints, `attempt_count_non_negative`, the
+  `safe_metadata_size` `CHECK` (`octet_length(...) <= 2000`),
+  `UNIQUE(correlation_id)`, `UNIQUE(organization_id, idempotency_key)`,
+  `UNIQUE(workflow_run_id, sequence_number)`, and supporting indexes —
+  see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 21 and
+  [WORKFLOWS.md](WORKFLOWS.md) for the schema itself. A single migration
+  creating all three tables, correctly ordered by `alembic revision
+  --autogenerate` with no manual operation reordering needed — every
+  table it references (including one new table referencing another new
+  table in the SAME migration) already carries the composite unique
+  constraint its FKs target by the time each `create_table` runs.
+  Validated against real PostgreSQL: applied, inspected (columns, all
+  composite and simple FKs including the 3-column one, `CHECK`
+  constraints, unique constraints, indexes), a direct raw-SQL smoke test
+  (15 cases) proving cross-tenant patient/initiator/step/event rejection,
+  the 3-column event↔step FK, `safe_metadata` size bound, correlation-id
+  uniqueness, and idempotency-key tenant-scoped uniqueness, downgraded
+  one step (with all eleven prior tables' data/schema confirmed
+  untouched), and re-applied cleanly. Contains no seeded workflows or
+  credentials of any kind — only schema DDL.
 
 ## 9. Migration Commands
 
@@ -532,6 +566,31 @@ DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentca
   `backend/tests/services/test_document_validation.py` need no database
   at all (pure filesystem-in-a-temp-dir and pure-function tests
   respectively) and run unconditionally.
+- **`WorkflowRun`/`WorkflowStep`/`WorkflowEvent` model/repository/service/
+  API tests, plus the mandatory real-concurrency and persistence/restart
+  proofs (STORY-009)**
+  (`backend/tests/models/test_workflow.py`,
+  `backend/tests/repositories/test_workflow.py`,
+  `backend/tests/services/test_workflow.py`,
+  `backend/tests/api/test_workflow_endpoints.py`) run against real
+  PostgreSQL under the same savepoint isolation. Separately, mirroring
+  the appointment-concurrency test's reasoning immediately above:
+  `backend/tests/db/test_workflow_concurrency.py` opens its own
+  dedicated engine and TWO genuinely independent connections, commits
+  real (later explicitly deleted) synthetic setup data, and races two
+  concurrently-executing `WorkflowService.start_workflow()` calls
+  against the SAME `pending` run via `asyncio.gather`, asserting exactly
+  one succeeds and the other fails with `WorkflowConflictError` — the
+  `SELECT ... FOR UPDATE` row-locking analog of the appointment engine's
+  `EXCLUDE`-constraint proof, for a single-row state-transition problem
+  instead of an overlap-detection one. `backend/tests/db/test_workflow_persistence.py`
+  is a second, distinct proof: it creates a full workflow (run, step,
+  events) via one engine, genuinely DISPOSES that engine (`await
+  engine.dispose()`), then builds a brand new, independent engine/session
+  from nothing but the connection URL and confirms it retrieves the
+  identical durable state — proving workflow state survives a
+  connection/engine's lifetime ending, the way a real process restart
+  would.
 - All prior stories' tests continue to pass unmodified by later stories,
   aside from two pre-existing tests (STORY-004) whose environment
   fixtures needed a synthetic `JWT_SECRET_KEY` added once the new
@@ -570,6 +629,15 @@ important not to over-trust it:
   `app.db.session`/`app.db.health` in isolation), so this never comes up
   in practice. Genuine concurrency safety is provable ONLY against real
   PostgreSQL — see `tests/db/test_appointment_concurrency.py`.
+- **`SELECT ... FOR UPDATE` row locking (STORY-009, `WorkflowService`)
+  has meaningfully different concurrency semantics under SQLite** —
+  SQLite has no genuine multi-connection row-level locking model
+  comparable to PostgreSQL's (its locking is file/database-level, not
+  per-row). As with the `EXCLUDE` constraints above, this never comes up
+  in practice because no test in this codebase runs the workflow model
+  against SQLite at all — genuine concurrency safety for workflow
+  transitions is provable ONLY against real PostgreSQL — see
+  `tests/db/test_workflow_concurrency.py`.
 
 ## 13. Secret Handling
 

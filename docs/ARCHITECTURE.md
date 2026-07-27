@@ -37,7 +37,7 @@ document only summarizes all seven.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001 through STORY-008)
+## 2. Current Architecture (STORY-001 through STORY-009)
 
 The backend is a single Python package (`backend/app/`) — a **modular
 monolith**:
@@ -206,6 +206,24 @@ What exists today:
   object" a schema-level impossibility. See
   [DOCUMENTS.md](DOCUMENTS.md) and
   [adr/ADR-0008-document-storage-and-security.md](adr/ADR-0008-document-storage-and-security.md).
+- **The persistent workflow engine & audit trail**
+  (`app/models/workflow.py`, its repositories/service,
+  `app/api/v1/endpoints/workflows.py` — STORY-009): `WorkflowRun`
+  (one administrative request), `WorkflowStep` (one unit of work within
+  a run), `WorkflowEvent` (an append-only audit trail) — durable,
+  PostgreSQL-backed state for future multi-step agent execution,
+  persistence and lifecycle mechanics ONLY (no LLM, no agent framework,
+  no LangGraph, no autonomous decision-making yet). Both run- and
+  step-level lifecycle transitions are centralized state machines
+  (`app/services/workflow.py`), concurrency-safe via `SELECT ... FOR
+  UPDATE` row locking — proven under real, concurrently-executing
+  transactions, not a SELECT-then-UPDATE pre-check — with every
+  transition and its corresponding audit event committed atomically.
+  Tenant/patient/initiator-membership/step/event ownership is enforced
+  at the DATABASE level via composite foreign keys, including a novel
+  3-column composite FK proving an event's linked step belongs to the
+  same run. See [WORKFLOWS.md](WORKFLOWS.md) and
+  [adr/ADR-0009-durable-workflow-state.md](adr/ADR-0009-durable-workflow-state.md).
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data — this
   now explicitly includes never logging `JWT_SECRET_KEY`, issued tokens,
@@ -227,16 +245,21 @@ What does **not** exist yet: a repository or service layer for
 `Organization`/`Facility` themselves; any entity beyond `Organization`/
 `Facility`/`User`/`OrganizationMembership`/`Patient`/`Department`/
 `Practitioner`/`PractitionerDepartment`/`PractitionerAvailability`/
-`Appointment`/`PatientDocument`; any CRUD API for `Organization`/
-`Facility`; patient update/delete; an appointment completion workflow; a
-race-proof (database exclusion constraint) AVAILABILITY-WINDOW-overlap
-check (as opposed to the appointment-overlap check, which IS race-proof
-— see [APPOINTMENTS.md](APPOINTMENTS.md)); general-purpose
-patient-readable department/practitioner discovery endpoints; malware
-scanning or a production object-storage backend for documents (see
-[DOCUMENTS.md](DOCUMENTS.md) Section 20); any LLM call; any agent; any
-frontend; public user registration; password reset; email verification;
-refresh tokens; or MFA.
+`Appointment`/`PatientDocument`/`WorkflowRun`/`WorkflowStep`/
+`WorkflowEvent`; any CRUD API for `Organization`/`Facility`; patient
+update/delete; an appointment completion workflow; a race-proof
+(database exclusion constraint) AVAILABILITY-WINDOW-overlap check (as
+opposed to the appointment-overlap check, which IS race-proof — see
+[APPOINTMENTS.md](APPOINTMENTS.md)); general-purpose patient-readable
+department/practitioner discovery endpoints; malware scanning or a
+production object-storage backend for documents (see
+[DOCUMENTS.md](DOCUMENTS.md) Section 20); any LLM call; any agent
+framework or LangGraph integration; tool calling; autonomous workflow
+decision-making; a general-purpose security/compliance audit system
+(distinct from `WorkflowEvent`'s own workflow-lifecycle audit trail —
+see [WORKFLOWS.md](WORKFLOWS.md) Section 18); any frontend; public user
+registration; password reset; email verification; refresh tokens; or
+MFA.
 
 ## 3. Planned Architecture (NOT Implemented)
 

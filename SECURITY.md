@@ -137,6 +137,18 @@ statement that AgentCare is not a diagnosis or treatment system.
   validation is explicitly NOT malware scanning** — see
   [docs/DOCUMENTS.md](docs/DOCUMENTS.md) Section 20 for the documented
   deployment-integration boundary this story does not claim to close.
+- As of STORY-009, `WorkflowRun`/`WorkflowStep`/`WorkflowEvent` are also
+  real, persisted models (`app/models/workflow.py` — see
+  [docs/WORKFLOWS.md](docs/WORKFLOWS.md)). They record administrative
+  workflow STATE ONLY: request type, status, timestamps, a bounded
+  `safe_metadata` field, and bounded `(failure_code,
+  failure_message_safe)` failure metadata — no raw patient conversation/
+  request text, no LLM prompt or response, and **no chain-of-thought or
+  hidden model reasoning of any kind** exists anywhere on these models,
+  and none may be added without a fresh, explicit design decision (see
+  [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Sections 12, 15, and 23). No
+  diagnosis, treatment, prescription, or urgency-triage category exists
+  in `WorkflowRequestType`.
 
 ## 8. Synthetic / Anonymized Test Data Requirement
 
@@ -181,6 +193,14 @@ statement that AgentCare is not a diagnosis or treatment system.
   today. Uploaded file BYTES are never logged under any circumstance —
   every operation on them is a stream, digest computation, or opaque
   storage write, never something serialized to a log line.
+- As of STORY-009, the same applies to `WorkflowRun`/`WorkflowStep`/
+  `WorkflowEvent` — `app/api/v1/endpoints/workflows.py` and
+  `app/services/workflow.py` do not log request/response bodies today.
+  `WorkflowService.fail_workflow`/`fail_step` accept only a pre-bounded
+  `(failure_code, failure_message_safe)` pair; nothing in this codebase
+  serializes a raw exception's `str()`/`repr()`, a stack trace, or a SQL
+  statement into a persisted or logged field for these models — see
+  [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Section 13.
 
 ## 10. Medical Document Handling Considerations
 

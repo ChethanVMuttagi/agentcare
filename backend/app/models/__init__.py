@@ -24,8 +24,19 @@ from app.models.practitioner import Practitioner, PractitionerType
 from app.models.practitioner_availability import DayOfWeek, PractitionerAvailability
 from app.models.practitioner_department import PractitionerDepartment
 from app.models.user import User
+from app.models.workflow import (
+    ActorType,
+    StepStatus,
+    WorkflowEvent,
+    WorkflowEventType,
+    WorkflowRequestType,
+    WorkflowRun,
+    WorkflowStatus,
+    WorkflowStep,
+)
 
 __all__ = [
+    "ActorType",
     "Appointment",
     "AppointmentStatus",
     "DayOfWeek",
@@ -45,5 +56,12 @@ __all__ = [
     "PractitionerDepartment",
     "PractitionerType",
     "Role",
+    "StepStatus",
     "User",
+    "WorkflowEvent",
+    "WorkflowEventType",
+    "WorkflowRequestType",
+    "WorkflowRun",
+    "WorkflowStatus",
+    "WorkflowStep",
 ]

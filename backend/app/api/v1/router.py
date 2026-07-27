@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     health,
     patients,
     practitioners,
+    workflows,
 )
 
 api_router = APIRouter()
@@ -18,3 +19,4 @@ api_router.include_router(departments.router, tags=["departments"])
 api_router.include_router(practitioners.router, tags=["practitioners"])
 api_router.include_router(appointments.router, tags=["appointments"])
 api_router.include_router(documents.router, tags=["documents"])
+api_router.include_router(workflows.router, tags=["workflows"])

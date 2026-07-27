@@ -40,8 +40,11 @@ or agent workflows exist.
   [docs/DATABASE.md](docs/DATABASE.md),
   [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md),
   [docs/RBAC.md](docs/RBAC.md), [docs/PATIENTS.md](docs/PATIENTS.md),
-  [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md), and
-  the Architecture Decision Record process ([docs/adr/](docs/adr/README.md))
+  [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md),
+  [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md),
+  [docs/DOCUMENTS.md](docs/DOCUMENTS.md),
+  [docs/WORKFLOWS.md](docs/WORKFLOWS.md), and the Architecture Decision
+  Record process ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
 - **FastAPI backend application foundation** (`backend/app/`): an
   application factory with lifespan-managed resource cleanup, versioned
@@ -159,14 +162,45 @@ or agent workflows exist.
   AgentCare's sixth Alembic migration, applied to and validated against
   real PostgreSQL. See [docs/DOCUMENTS.md](docs/DOCUMENTS.md) and
   [docs/adr/ADR-0008-document-storage-and-security.md](docs/adr/ADR-0008-document-storage-and-security.md).
+- **Persistent workflow engine & audit trail**
+  (`backend/app/models/workflow.py`; its repositories/service;
+  `backend/app/api/v1/endpoints/workflows.py`): `WorkflowRun` (one
+  administrative request), `WorkflowStep` (one unit of work within a
+  run), and `WorkflowEvent` (an append-only audit trail) — durable,
+  PostgreSQL-backed state for future multi-step agent execution,
+  **persistence and lifecycle mechanics only** (no LLM, no agent
+  framework, no LangGraph, no autonomous decision-making yet). Run- and
+  step-level lifecycle transitions follow centralized state machines;
+  **two workers can never both incorrectly advance the same workflow's
+  state** — enforced via `SELECT ... FOR UPDATE` row locking, proven
+  under real, genuinely concurrent transactions (not a
+  SELECT-then-UPDATE pre-check), with a losing caller deterministically
+  rejected. Every transition and its corresponding audit event commit
+  atomically. Tenant/patient/initiator-membership/step/event ownership
+  is enforced at the DATABASE level via composite foreign keys,
+  including a 3-column composite FK proving an event's linked step
+  belongs to the SAME run. Correlation ids are always server-generated
+  (never client-chosen); `safe_metadata` and failure fields are
+  size-bounded and explicitly documented as never permitted to hold a
+  raw prompt, chain-of-thought, or exception. Durability is proven
+  directly: a workflow created via one database engine survives that
+  engine being fully disposed and a brand-new one built from scratch.
+  `ADMIN`/`STAFF` may create/list/get/cancel any organization workflow
+  (and inspect its steps/events); `PATIENT` may do the same for their
+  OWN workflows only, and can never cancel one. Backed by AgentCare's
+  seventh Alembic migration, applied to and validated against real
+  PostgreSQL. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) and
+  [docs/adr/ADR-0009-durable-workflow-state.md](docs/adr/ADR-0009-durable-workflow-state.md).
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app,
   real (SQLite-backed, for isolation) infrastructure-level database
-  behavior, all eleven domain models, password hashing, JWT handling,
+  behavior, all fourteen domain models, password hashing, JWT handling,
   the auth API, the full patient/department/practitioner/availability/
-  appointment/document repository/service/API layers end-to-end against
-  real PostgreSQL, a dedicated real-concurrency test proving the
-  appointment double-booking guarantee under genuinely concurrent
-  transactions, and filesystem-storage/file-signature tests using only
+  appointment/document/workflow repository/service/API layers
+  end-to-end against real PostgreSQL, dedicated real-concurrency tests
+  proving both the appointment double-booking guarantee AND the
+  workflow-transition race guarantee under genuinely concurrent
+  transactions, a dedicated persistence/restart proof for workflow
+  state, and filesystem-storage/file-signature tests using only
   temporary directories (never a tracked path)
 
 **Not yet implemented** (planned, across future stories):
@@ -181,11 +215,18 @@ or agent workflows exist.
   general-purpose patient-readable department/practitioner discovery
   (a scoped available-times discovery endpoint IS implemented)
 - Further domain models below the tenant hierarchy (referrals, staff
-  profiles, documents, etc.)
+  profiles, etc.)
 - Patient update/delete; finer-grained permissions beyond `Role`; refresh
   tokens; token revocation; password reset; email verification; MFA;
   OAuth/social login; public user registration
-- LangGraph-based agent workflows
+- An LLM client, an agent framework, LangGraph-based orchestration, tool
+  calling, and autonomous workflow decision-making — `WorkflowRun`/
+  `WorkflowStep`/`WorkflowEvent` (above) are the durable-state
+  FOUNDATION a future story will build this on top of, not the
+  orchestration itself
+- A general-purpose security/compliance audit system (distinct from
+  `WorkflowEvent`'s own workflow-lifecycle audit trail — see
+  [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Section 18)
 - LLM provider abstraction (Groq / OpenAI / Anthropic)
 - Next.js frontend
 - Docker/containerization
@@ -360,13 +401,17 @@ patient records — see [docs/PATIENTS.md](docs/PATIENTS.md)), the
 [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md)), and the
 `patient_documents` table (administrative document metadata — never
 file bytes — plus a storage reference; see
-[docs/DOCUMENTS.md](docs/DOCUMENTS.md)). See
+[docs/DOCUMENTS.md](docs/DOCUMENTS.md)), and the `workflow_runs`/
+`workflow_steps`/`workflow_events` tables (durable workflow-lifecycle
+state and an append-only audit trail — see
+[docs/WORKFLOWS.md](docs/WORKFLOWS.md)). See
 [docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow and
 testing strategy (SQLite is used only for isolated infrastructure-level
 tests; PostgreSQL remains the production database and is what every
-domain model, repository, service, and API test suite — including a
-dedicated real-concurrency test — runs against; document storage tests
-use only pytest-managed temporary directories, never the real configured
+domain model, repository, service, and API test suite — including
+dedicated real-concurrency tests for both appointment booking and
+workflow transitions — runs against; document storage tests use only
+pytest-managed temporary directories, never the real configured
 `DOCUMENT_STORAGE_PATH`).
 
 Run the test suite and quality checks from `backend/`:
