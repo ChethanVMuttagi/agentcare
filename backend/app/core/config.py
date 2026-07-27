@@ -43,12 +43,25 @@ class Settings(BaseSettings):
     # Optional at startup: no database is wired up until a later story.
     database_url: SecretStr | None = None
 
-    # --- LLM provider ----------------------------------------------------------
-    # Optional at startup: no LLM integration exists until a later story.
+    # --- LLM provider (STORY-010) ------------------------------------------------
+    # Optional at startup: the application (and every route that doesn't
+    # touch `app.ai`) must start with no LLM configured at all — only the
+    # `POST .../agent/execute` route needs a real, working provider, and
+    # it fails clearly (see `app.ai.providers.errors.ProviderUnavailableError`)
+    # rather than the whole app refusing to boot. See docs/AI_SAFETY.md
+    # "Model/Provider Configuration".
+    #
+    # `llm_provider` is a plain string, not an enum: `app.ai.providers`
+    # validates it against the SMALL set of providers actually
+    # implemented (currently just "anthropic") at the point a provider is
+    # actually constructed, not at `Settings` load time — keeping
+    # `Settings` itself provider-agnostic, consistent with "the rest of
+    # AgentCare must not depend directly on a vendor SDK."
     llm_provider: str | None = None
-    groq_api_key: SecretStr | None = None
-    openai_api_key: SecretStr | None = None
-    anthropic_api_key: SecretStr | None = None
+    llm_model: str | None = None
+    llm_api_key: SecretStr | None = None
+    llm_timeout_seconds: float = 30.0
+    llm_max_output_tokens: int = 1024
 
     # --- Auth --------------------------------------------------------------------
     # Optional in development/test only — see `_require_jwt_secret_outside_development`.
@@ -92,6 +105,18 @@ class Settings(BaseSettings):
                 "JWT_SECRET_KEY must be set when APP_ENV is staging or production — "
                 "the application must not silently sign/verify tokens without a real secret."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_llm_bounds(self) -> Settings:
+        if self.llm_provider is not None and not self.llm_provider.strip():
+            raise ValueError("LLM_PROVIDER must not be blank when set.")
+        if self.llm_model is not None and not self.llm_model.strip():
+            raise ValueError("LLM_MODEL must not be blank when set.")
+        if not (0 < self.llm_timeout_seconds <= 120):
+            raise ValueError("LLM_TIMEOUT_SECONDS must be between 0 (exclusive) and 120 seconds.")
+        if not (0 < self.llm_max_output_tokens <= 8192):
+            raise ValueError("LLM_MAX_OUTPUT_TOKENS must be between 1 and 8192.")
         return self
 
     @model_validator(mode="after")

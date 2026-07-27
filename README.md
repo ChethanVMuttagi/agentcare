@@ -43,8 +43,10 @@ or agent workflows exist.
   [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md),
   [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md),
   [docs/DOCUMENTS.md](docs/DOCUMENTS.md),
-  [docs/WORKFLOWS.md](docs/WORKFLOWS.md), and the Architecture Decision
-  Record process ([docs/adr/](docs/adr/README.md))
+  [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
+  [docs/AI_SAFETY.md](docs/AI_SAFETY.md), [docs/TOOLS.md](docs/TOOLS.md),
+  and the Architecture Decision Record process
+  ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
 - **FastAPI backend application foundation** (`backend/app/`): an
   application factory with lifespan-managed resource cleanup, versioned
@@ -191,17 +193,53 @@ or agent workflows exist.
   seventh Alembic migration, applied to and validated against real
   PostgreSQL. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) and
   [docs/adr/ADR-0009-durable-workflow-state.md](docs/adr/ADR-0009-durable-workflow-state.md).
+- **Safe LLM & tool-calling foundation** (`backend/app/ai/`;
+  `backend/app/api/v1/endpoints/agent.py`): the first story to
+  introduce an LLM — a provider-independent `LLMProvider` abstraction
+  and one real provider (**Anthropic Claude**, via the official SDK,
+  using its tool-use feature for genuinely structured output, never
+  prose parsed by regex). **The LLM is treated as fully untrusted**: its
+  output is validated into one of four strongly-typed decisions
+  (`tool_call`/`clarification_required`/`safe_response`/`refusal`),
+  every variant structurally rejecting unknown fields — including a
+  smuggled chain-of-thought/reasoning field, which fails the ENTIRE
+  decision, not just that field. A deterministic, code-level safety
+  policy refuses symptom-based or medication/dosage requests BEFORE the
+  model is ever called (no "I have chest pain, which department should
+  I see?" ever reaches the model, or results in autonomous clinical
+  routing). An explicit, allowlisted `ToolRegistry` (a plain dict lookup
+  — never `getattr`/`eval`/`exec`/dynamic import/shell execution) backs
+  two real tools (`check_availability`, `book_appointment`), each
+  calling the REAL existing service layer — no fake success path. A
+  SERVER-CREATED execution context (never model-constructed) carries
+  the only trusted identity data any tool acts on: for a `PATIENT`
+  caller, their own linked patient id ALWAYS wins over anything a model
+  decision supplies as an argument, even if asked to book for another
+  patient. One model decision leads to AT MOST one tool execution — no
+  autonomous multi-step loop. Every execution is fully persisted via the
+  workflow engine above (one new event type, `tool_invoked`); no raw
+  request text, prompt, or provider response is ever persisted. Backed
+  by AgentCare's eighth Alembic migration. See
+  [docs/AI_SAFETY.md](docs/AI_SAFETY.md), [docs/TOOLS.md](docs/TOOLS.md),
+  and
+  [docs/adr/ADR-0010-llm-and-tool-security-boundary.md](docs/adr/ADR-0010-llm-and-tool-security-boundary.md).
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app,
   real (SQLite-backed, for isolation) infrastructure-level database
   behavior, all fourteen domain models, password hashing, JWT handling,
   the auth API, the full patient/department/practitioner/availability/
-  appointment/document/workflow repository/service/API layers
+  appointment/document/workflow/AI-tool repository/service/API layers
   end-to-end against real PostgreSQL, dedicated real-concurrency tests
   proving both the appointment double-booking guarantee AND the
   workflow-transition race guarantee under genuinely concurrent
   transactions, a dedicated persistence/restart proof for workflow
-  state, and filesystem-storage/file-signature tests using only
-  temporary directories (never a tracked path)
+  state, a mandatory end-to-end proof that an AI-assisted patient
+  request genuinely persists a real appointment and a full workflow
+  audit trail, a full adversarial/security test suite (hostile tool
+  names, prompt-injection attempts, cross-tenant/cross-patient
+  rejection, malformed model output), and filesystem-storage/
+  file-signature tests using only temporary directories (never a
+  tracked path) — every AI-related test uses a deterministic fake LLM
+  provider, never a real network call or API key
 
 **Not yet implemented** (planned, across future stories):
 - A CRUD API, service, and repository layer for `Organization`/`Facility`
@@ -216,18 +254,23 @@ or agent workflows exist.
   (a scoped available-times discovery endpoint IS implemented)
 - Further domain models below the tenant hierarchy (referrals, staff
   profiles, etc.)
+- Reschedule/cancel AI tools (see [docs/TOOLS.md](docs/TOOLS.md)
+  Section 6 for why this is a deliberate depth-over-breadth choice)
 - Patient update/delete; finer-grained permissions beyond `Role`; refresh
   tokens; token revocation; password reset; email verification; MFA;
   OAuth/social login; public user registration
-- An LLM client, an agent framework, LangGraph-based orchestration, tool
-  calling, and autonomous workflow decision-making — `WorkflowRun`/
-  `WorkflowStep`/`WorkflowEvent` (above) are the durable-state
-  FOUNDATION a future story will build this on top of, not the
-  orchestration itself
+- The final multi-agent architecture, agent-to-agent delegation,
+  LangGraph-based orchestration, and autonomous multi-step decision
+  loops — the LLM/tool-calling foundation above (STORY-010) implements
+  ONE model decision leading to AT MOST one tool execution; multi-step
+  planning and multi-agent coordination are the next story's work, built
+  on top of this foundation, not a redesign of it
 - A general-purpose security/compliance audit system (distinct from
   `WorkflowEvent`'s own workflow-lifecycle audit trail — see
   [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Section 18)
-- LLM provider abstraction (Groq / OpenAI / Anthropic)
+- A second real LLM provider (Groq / OpenAI) — the provider abstraction
+  supports adding one without touching the decision/safety/tool layers,
+  but only Anthropic is implemented so far
 - Next.js frontend
 - Docker/containerization
 - CI/CD workflows
@@ -401,18 +444,23 @@ patient records — see [docs/PATIENTS.md](docs/PATIENTS.md)), the
 [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md)), and the
 `patient_documents` table (administrative document metadata — never
 file bytes — plus a storage reference; see
-[docs/DOCUMENTS.md](docs/DOCUMENTS.md)), and the `workflow_runs`/
+[docs/DOCUMENTS.md](docs/DOCUMENTS.md)), the `workflow_runs`/
 `workflow_steps`/`workflow_events` tables (durable workflow-lifecycle
 state and an append-only audit trail — see
-[docs/WORKFLOWS.md](docs/WORKFLOWS.md)). See
-[docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow and
-testing strategy (SQLite is used only for isolated infrastructure-level
+[docs/WORKFLOWS.md](docs/WORKFLOWS.md)), and one further migration
+extending `workflow_events` (a `sequence` ordering column and one new
+event type, `tool_invoked`, for the safe LLM & tool-calling foundation
+— see [docs/AI_SAFETY.md](docs/AI_SAFETY.md)/[docs/TOOLS.md](docs/TOOLS.md)).
+See [docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow
+and testing strategy (SQLite is used only for isolated infrastructure-level
 tests; PostgreSQL remains the production database and is what every
 domain model, repository, service, and API test suite — including
 dedicated real-concurrency tests for both appointment booking and
-workflow transitions — runs against; document storage tests use only
-pytest-managed temporary directories, never the real configured
-`DOCUMENT_STORAGE_PATH`).
+workflow transitions, and the mandatory end-to-end AI-tool-execution
+proof — runs against; document storage tests use only pytest-managed
+temporary directories, never the real configured
+`DOCUMENT_STORAGE_PATH`; AI/tool-calling tests use a deterministic fake
+LLM provider, never a real network call or API key).
 
 Run the test suite and quality checks from `backend/`:
 

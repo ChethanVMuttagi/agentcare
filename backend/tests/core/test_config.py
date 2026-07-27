@@ -9,9 +9,9 @@ def test_defaults_are_safe_for_startup() -> None:
     assert settings.app_env is Environment.DEVELOPMENT
     assert settings.debug is False
     assert settings.database_url is None
-    assert settings.groq_api_key is None
-    assert settings.openai_api_key is None
-    assert settings.anthropic_api_key is None
+    assert settings.llm_provider is None
+    assert settings.llm_model is None
+    assert settings.llm_api_key is None
     assert settings.jwt_secret_key is None
 
 
@@ -111,3 +111,58 @@ def test_development_and_test_allow_local_document_storage() -> None:
     for env in (Environment.DEVELOPMENT, Environment.TEST):
         settings = Settings(_env_file=None, app_env=env)
         assert settings.document_storage_backend == "local"
+
+
+def test_llm_defaults_are_safe_for_startup_with_no_key_configured() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.llm_provider is None
+    assert settings.llm_model is None
+    assert settings.llm_api_key is None
+    assert settings.llm_timeout_seconds == 30.0
+    assert settings.llm_max_output_tokens == 1024
+
+
+def test_llm_api_key_is_masked_in_repr() -> None:
+    settings = Settings(_env_file=None, llm_api_key="synthetic-test-llm-key")
+    assert "synthetic-test-llm-key" not in repr(settings)
+    assert "synthetic-test-llm-key" not in str(settings)
+
+
+def test_llm_timeout_must_be_positive_and_bounded() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_timeout_seconds=-5)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_timeout_seconds=1000)
+
+
+def test_llm_max_output_tokens_must_be_positive_and_bounded() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_max_output_tokens=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_max_output_tokens=-1)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_max_output_tokens=100_000)
+
+
+def test_llm_provider_and_model_reject_blank_strings() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_provider="   ")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_model="   ")
+
+
+def test_llm_provider_can_be_configured_without_a_database() -> None:
+    # The application (and this Settings model) must start fine with an
+    # LLM provider configured but no database — the two are independent.
+    settings = Settings(
+        _env_file=None,
+        llm_provider="anthropic",
+        llm_model="claude-fake-model",
+        llm_api_key="synthetic-test-llm-key",
+    )
+    assert settings.llm_provider == "anthropic"
+    assert settings.llm_model == "claude-fake-model"
+    assert settings.llm_api_key is not None
+    assert settings.llm_api_key.get_secret_value() == "synthetic-test-llm-key"

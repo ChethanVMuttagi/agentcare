@@ -32,13 +32,21 @@ async def list_by_run(
     session: AsyncSession, *, organization_id: uuid.UUID, workflow_run_id: uuid.UUID
 ) -> Sequence[WorkflowEvent]:
     """Return every event for one workflow run, oldest first (the
-    natural order to read a history/audit trail in)."""
+    natural order to read a history/audit trail in).
+
+    Ordered by `sequence` — a server-assigned, strictly monotonically
+    increasing identity column — NOT `created_at`. Two events created in
+    rapid succession (e.g. `step_started` immediately followed by
+    `tool_invoked`) can share the same `created_at` value at Python
+    timestamp resolution; `sequence` cannot tie, and always matches
+    insertion order.
+    """
     result = await session.execute(
         select(WorkflowEvent)
         .where(
             WorkflowEvent.organization_id == organization_id,
             WorkflowEvent.workflow_run_id == workflow_run_id,
         )
-        .order_by(WorkflowEvent.created_at, WorkflowEvent.id)
+        .order_by(WorkflowEvent.sequence)
     )
     return result.scalars().all()

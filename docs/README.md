@@ -6,15 +6,16 @@ documentation is not backfilled after the fact.
 
 ## Status
 
-As of STORY-009 (Persistent Workflow Engine & Audit Trail), this index,
+As of STORY-010 (Safe LLM & Tool-Calling Foundation), this index,
 the [Architecture Decision Records](adr/README.md) process,
 [ARCHITECTURE.md](ARCHITECTURE.md), [DATABASE.md](DATABASE.md),
 [DOMAIN_MODEL.md](DOMAIN_MODEL.md), [RBAC.md](RBAC.md),
 [PATIENTS.md](PATIENTS.md), [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md),
-[APPOINTMENTS.md](APPOINTMENTS.md), [DOCUMENTS.md](DOCUMENTS.md), and
-[WORKFLOWS.md](WORKFLOWS.md) exist. The remaining documents listed below
-are **reserved and intentionally not yet created**. Each will be added
-when the story that needs it is implemented, so that documentation never
+[APPOINTMENTS.md](APPOINTMENTS.md), [DOCUMENTS.md](DOCUMENTS.md),
+[WORKFLOWS.md](WORKFLOWS.md), [AI_SAFETY.md](AI_SAFETY.md), and
+[TOOLS.md](TOOLS.md) exist. The remaining documents listed below are
+**reserved and intentionally not yet created**. Each will be added when
+the story that needs it is implemented, so that documentation never
 describes functionality that doesn't exist yet.
 
 ## Planned Documents
@@ -23,9 +24,7 @@ describes functionality that doesn't exist yet.
 |---|---|
 | `PRODUCT.md` | Product vision, scope, and user-facing functionality |
 | `API.md` | API surface, conventions, versioning |
-| `AGENTS.md` | Agentic AI components: roles, responsibilities, boundaries |
-| `TOOLS.md` | Tools exposed to agents and how they're governed |
-| `SAFETY.md` | Safety constraints for an agentic healthcare-adjacent system |
+| `AGENTS.md` | The final multi-agent architecture: roles, responsibilities, agent-to-agent boundaries (builds on [AI_SAFETY.md](AI_SAFETY.md)/[TOOLS.md](TOOLS.md)'s single-decision foundation) |
 | `SECURITY.md` | See [SECURITY.md](../SECURITY.md) at the repository root |
 | `PRIVACY.md` | Data privacy handling and boundaries |
 | `AUDIT.md` | A general-purpose security/compliance audit log, distinct from `WorkflowEvent`'s own workflow-lifecycle audit trail (see [WORKFLOWS.md](WORKFLOWS.md) Section 18) |
@@ -44,25 +43,43 @@ foundation) in STORY-006, `APPOINTMENTS.md` (appointment booking,
 rescheduling, cancellation, and genuinely race-safe double-booking
 prevention) in STORY-007, `DOCUMENTS.md` (secure administrative
 document upload, storage abstraction, and lifecycle management) in
-STORY-008, and `WORKFLOWS.md` (durable workflow-run/step/event state,
+STORY-008, `WORKFLOWS.md` (durable workflow-run/step/event state,
 centralized lifecycle transitions, `SELECT ... FOR UPDATE` concurrency
 safety, and an append-only audit trail — persistence and lifecycle
-mechanics only, no LLM/agent/LangGraph integration yet) in STORY-009 —
-see [RBAC.md](RBAC.md), [PATIENTS.md](PATIENTS.md),
+mechanics only, no LLM/agent/LangGraph integration yet) in STORY-009,
+and `AI_SAFETY.md`/`TOOLS.md` (the LLM trust boundary, structured
+decision contract, deterministic healthcare safety policy, and explicit
+allowlisted tool registry — one model decision, at most one tool
+execution, no autonomous multi-step loop yet) in STORY-010 — see
+[RBAC.md](RBAC.md), [PATIENTS.md](PATIENTS.md),
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md),
-[APPOINTMENTS.md](APPOINTMENTS.md), [DOCUMENTS.md](DOCUMENTS.md), and
-[WORKFLOWS.md](WORKFLOWS.md) directly rather than the table above.
+[APPOINTMENTS.md](APPOINTMENTS.md), [DOCUMENTS.md](DOCUMENTS.md),
+[WORKFLOWS.md](WORKFLOWS.md), [AI_SAFETY.md](AI_SAFETY.md), and
+[TOOLS.md](TOOLS.md) directly rather than the table above.
 
 **Note on the `WORKFLOWS.md` filename**: this document was originally
 reserved (in an earlier revision of this index) for "LangGraph workflows
 / orchestration design." STORY-009 claimed the filename for the
 PERSISTENCE layer instead — `WorkflowRun`/`WorkflowStep`/`WorkflowEvent`
 and their lifecycle mechanics, deliberately built with NO LLM, agent
-framework, or LangGraph integration. A future story that adds real
-agent/LangGraph orchestration on top of this persistence layer should
-extend [WORKFLOWS.md](WORKFLOWS.md) itself (it already documents the
-foundation that orchestration will build on) rather than introducing a
-second, confusingly-named document.
+framework, or LangGraph integration. STORY-010 then built the LLM/tool
+layer described in this note, but kept it in NEW documents
+([AI_SAFETY.md](AI_SAFETY.md), [TOOLS.md](TOOLS.md)) rather than
+folding it into [WORKFLOWS.md](WORKFLOWS.md) — the persistence model and
+the AI trust boundary are different enough concerns to warrant separate
+documents, cross-linked from each other. A future story that adds the
+final multi-agent/LangGraph architecture (`AGENTS.md` in the table
+above) should extend [AI_SAFETY.md](AI_SAFETY.md)/[TOOLS.md](TOOLS.md)
+where they already cover the relevant foundation, adding `AGENTS.md`
+specifically for multi-agent-specific concerns (roles, delegation,
+agent-to-agent boundaries) that don't fit either existing document.
+
+**Note on the `SAFETY.md` filename**: an earlier revision of this index
+reserved `SAFETY.md` for "safety constraints for an agentic
+healthcare-adjacent system." STORY-010's own specification asked for
+`AI_SAFETY.md` specifically, which now serves that purpose — no
+separate `SAFETY.md` exists or is planned; references to it elsewhere
+in earlier documentation should be read as `AI_SAFETY.md`.
 
 ## Documentation Principles
 

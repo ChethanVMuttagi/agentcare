@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,7 +143,18 @@ async def test_list_by_organization_orders_newest_first(
     make_workflow_run: MakeWorkflowRun,
 ) -> None:
     org, user = await _scenario(make_organization, make_user, make_membership, "repo-run-order")
+    # `created_at` is Python-generated (see `app.db.mixins.TimestampMixin`)
+    # and two rows created back-to-back can otherwise share the same
+    # value at timestamp resolution, making "newest first" ambiguous —
+    # force a real gap so this test is deterministic rather than
+    # occasionally flaky. `WorkflowEvent` has a database-assigned
+    # `sequence` column immune to this (see
+    # tests/repositories/test_workflow.py::test_event_list_by_run_orders_oldest_first);
+    # `WorkflowRun` listing does not need that guarantee for its "best
+    # effort newest first" semantics, so only the test is adjusted here.
     first = await make_workflow_run(org, user.id)
+    first.created_at = datetime.now(UTC) - timedelta(seconds=5)
+    await db_session.flush()
     second = await make_workflow_run(org, user.id)
 
     results = await workflow_run_repository.list_by_organization(

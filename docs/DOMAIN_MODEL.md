@@ -842,7 +842,7 @@ breakdown.
 - Soft deletion, if ever needed, would be a deliberate future decision
   with its own ADR — not implied by `is_active` (Section 13).
 
-## 21. WorkflowRun, WorkflowStep, WorkflowEvent (STORY-009)
+## 21. WorkflowRun, WorkflowStep, WorkflowEvent (STORY-009, extended STORY-010)
 
 `app/models/workflow.py` — tables `workflow_runs`, `workflow_steps`,
 `workflow_events`. [WORKFLOWS.md](WORKFLOWS.md) is the authoritative
@@ -851,8 +851,14 @@ document for this domain — full column tables, the `WorkflowStatus`/
 strategy (proven under real concurrent transactions), transition+event
 atomicity, the actor model, correlation/idempotency strategy, the
 `safe_metadata`/failure-metadata content policy, the full RBAC matrix,
-and the healthcare-safety/no-chain-of-thought boundary. Summarized here
-at the same level as [DOCUMENTS.md](DOCUMENTS.md) is summarized above:
+and the healthcare-safety/no-chain-of-thought boundary. STORY-010
+extended `workflow_events` (no new table) with a `sequence` column
+(server-assigned, strictly monotonic — the authoritative ordering key,
+replacing a `created_at`-based ordering that could tie) and one new
+`WorkflowEventType` value, `tool_invoked` — see
+[WORKFLOWS.md](WORKFLOWS.md) Section 5 and
+[AI_SAFETY.md](AI_SAFETY.md). Summarized here at the same level as
+[DOCUMENTS.md](DOCUMENTS.md) is summarized above:
 
 - **`WorkflowRun`** belongs to exactly one `Organization`, optionally
   references a `Patient` (composite FK, same-organization enforced) and

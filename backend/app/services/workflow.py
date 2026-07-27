@@ -689,6 +689,49 @@ class WorkflowService:
             actor_identifier=actor_identifier,
         )
 
+    async def record_tool_invocation(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        workflow_run_id: uuid.UUID,
+        step_id: uuid.UUID,
+        actor_type: ActorType,
+        actor_identifier: str,
+        tool_name: str,
+    ) -> WorkflowEvent:
+        """Append a `TOOL_INVOKED` event for `step_id` (STORY-010) —
+        does NOT change the step's status; it is a pure audit-trail
+        addition recording "a tool was dispatched," distinct from the
+        step merely starting (`start_step`) or finishing
+        (`complete_step`/`fail_step`). `safe_metadata` carries ONLY the
+        tool's name — never its arguments or result. Commits
+        immediately (there is no corresponding state transition to keep
+        atomic with here, unlike `_transition_run`/`_transition_step`).
+        """
+        step = await workflow_step_repository.get_by_id(
+            self._session,
+            organization_id=organization_id,
+            workflow_run_id=workflow_run_id,
+            step_id=step_id,
+        )
+        if step is None:
+            raise WorkflowStepNotFoundError("No step found with this id in this workflow.")
+
+        event = await workflow_event_repository.create(
+            self._session,
+            WorkflowEvent(
+                organization_id=organization_id,
+                workflow_run_id=workflow_run_id,
+                workflow_step_id=step_id,
+                event_type=WorkflowEventType.TOOL_INVOKED,
+                actor_type=actor_type,
+                actor_identifier=actor_identifier,
+                safe_metadata={"tool_name": tool_name},
+            ),
+        )
+        await self._session.commit()
+        return event
+
 
 __all__ = [
     "WorkflowConflictError",

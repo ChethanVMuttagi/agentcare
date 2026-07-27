@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -153,7 +154,16 @@ async def test_list_by_patient_orders_newest_first(
     org, user, patient = await _scenario(
         make_organization, make_user, make_membership, make_patient, "repo-doc-order"
     )
+    # `created_at` is Python-generated (see `app.db.mixins.TimestampMixin`)
+    # and two rows created back-to-back can otherwise share the same
+    # value at timestamp resolution, making "newest first" ambiguous —
+    # force a real gap so this test is deterministic rather than
+    # occasionally flaky (same fix applied to the analogous
+    # `WorkflowRun` listing test — see
+    # tests/repositories/test_workflow.py::test_list_by_organization_orders_newest_first).
     first = await make_patient_document(org, patient, user.id)
+    first.created_at = datetime.now(UTC) - timedelta(seconds=5)
+    await db_session.flush()
     second = await make_patient_document(org, patient, user.id)
 
     results = await patient_document_repository.list_by_patient(

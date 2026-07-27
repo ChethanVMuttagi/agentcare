@@ -296,12 +296,19 @@ server-derived patient identity, plus ADMIN/STAFF-only deletion
 `WorkflowRun` creation/list/get/steps/events, RBAC-enforced with the
 same server-derived patient identity, plus ADMIN/STAFF-only
 cancellation (STORY-009 — see [WORKFLOWS.md](WORKFLOWS.md) Sections
-20-21).
+20-21); `POST .../agent/execute`, RBAC-enforced with the same
+server-derived patient identity — a `PATIENT` caller's identity always
+wins over anything a model decision supplies as a tool argument, never
+merely validated against it (STORY-010 — see
+[AI_SAFETY.md](AI_SAFETY.md) and [TOOLS.md](TOOLS.md) Section 3).
 
 **Explicitly not implemented** (belong to later stories): appointment
 completion workflow, malware scanning, a production document-storage
-backend, an LLM client, an agent framework, LangGraph, tool calling,
-autonomous workflow decision-making, refresh tokens, password reset,
+backend, the final multi-agent architecture, agent-to-agent delegation,
+LangGraph integration, or an autonomous multi-step decision loop
+(STORY-010 implements ONE model decision leading to AT MOST one tool
+call, RBAC-enforced identically to every other route — see
+[AI_SAFETY.md](AI_SAFETY.md) Section 11), refresh tokens, password reset,
 email verification, MFA, OAuth/social login, public registration, a
 general-purpose security/compliance audit-event system (distinct from
 `WorkflowEvent`'s own workflow-lifecycle audit trail — see

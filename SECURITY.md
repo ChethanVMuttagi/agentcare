@@ -49,6 +49,20 @@ statement that AgentCare is not a diagnosis or treatment system.
   messages returned to clients, or embedded in frontend/client-side code.
 - Each environment (local, staging, production) uses its own keys where the
   provider supports it, so a leaked dev key does not compromise production.
+- As of STORY-010, `LLM_API_KEY` is real, implemented configuration
+  (`app/core/config.py` — see [docs/AI_SAFETY.md](docs/AI_SAFETY.md)
+  Section 4): a `SecretStr` field, masked in `repr()`/`str()`
+  (`tests/core/test_config.py::test_llm_api_key_is_masked_in_repr`),
+  optional at application startup (the app and every non-AI route work
+  with none configured), and read from environment/`.env` only — never
+  hardcoded, never committed. `.env.example` holds only placeholder
+  values (`LLM_API_KEY=changeme`). `app.ai.providers.anthropic_provider.AnthropicProvider`
+  never logs the key and never includes it in any exception message —
+  every vendor SDK exception is caught and translated to a generic,
+  safe error before it can reach a log line or an API response. No test
+  in this codebase requires a real Anthropic API key or internet
+  access — every test uses `app.ai.providers.fake_provider.FakeLLMProvider`
+  instead of a real provider call.
 
 ## 5. Database Credential Handling
 
@@ -149,6 +163,20 @@ statement that AgentCare is not a diagnosis or treatment system.
   [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Sections 12, 15, and 23). No
   diagnosis, treatment, prescription, or urgency-triage category exists
   in `WorkflowRequestType`.
+- As of STORY-010, the first LLM integration (`app/ai/` — see
+  [docs/AI_SAFETY.md](docs/AI_SAFETY.md)) is real. The model is treated
+  as fully UNTRUSTED throughout: it never receives, and cannot request,
+  real patient PII/PHI beyond what a caller's own request text or a
+  resolved tool argument (a UUID) already contains, and
+  `AgentExecuteRequest.request_text` (the one free-form field in this
+  story) is deliberately NEVER persisted anywhere in the workflow
+  chain — proven directly in
+  `tests/ai/test_orchestration.py::test_no_raw_request_text_is_ever_persisted`.
+  No tool exposes a clinical-decision capability (diagnosis, treatment,
+  prescription, dosage), and a deterministic, code-level safety policy
+  (`app.ai.safety.SafetyPolicy`) refuses symptom-based or
+  medication/dosage requests BEFORE the model is ever called — see
+  [docs/AI_SAFETY.md](docs/AI_SAFETY.md) Section 7.
 
 ## 8. Synthetic / Anonymized Test Data Requirement
 
@@ -201,6 +229,16 @@ statement that AgentCare is not a diagnosis or treatment system.
   serializes a raw exception's `str()`/`repr()`, a stack trace, or a SQL
   statement into a persisted or logged field for these models — see
   [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Section 13.
+- As of STORY-010, `app/api/v1/endpoints/agent.py` and `app/ai/`
+  (providers, orchestration, tools) do not log request/response bodies
+  today. Specifically never logged: `AgentExecuteRequest.request_text`,
+  the system prompt, a provider's raw response, `LLM_API_KEY`, or any
+  chain-of-thought/reasoning content (none exists to log — see
+  [docs/AI_SAFETY.md](docs/AI_SAFETY.md) Section 6). Every vendor SDK
+  exception `AnthropicProvider` catches is translated to a safe,
+  generic message before it reaches any log statement or API response —
+  never the vendor exception's own text, which could include request
+  detail.
 
 ## 10. Medical Document Handling Considerations
 

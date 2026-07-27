@@ -26,6 +26,11 @@ dependencies = [
     # see app/api/v1/endpoints/documents.py. Pure-Python, no OS-level
     # dependency.
     "python-multipart>=0.0.12,<1.0",
+    # Official Anthropic SDK — the one real LLM provider implemented in
+    # STORY-010 (see app/ai/providers/anthropic_provider.py). A direct
+    # provider adapter, not LangChain/LangGraph — see
+    # docs/adr/ADR-0010-llm-and-tool-security-boundary.md.
+    "anthropic>=0.40,<1.0",
 ]
 
 [project.optional-dependencies]

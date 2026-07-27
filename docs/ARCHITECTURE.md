@@ -37,7 +37,7 @@ document only summarizes all seven.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001 through STORY-009)
+## 2. Current Architecture (STORY-001 through STORY-010)
 
 The backend is a single Python package (`backend/app/`) — a **modular
 monolith**:
@@ -224,6 +224,26 @@ What exists today:
   3-column composite FK proving an event's linked step belongs to the
   same run. See [WORKFLOWS.md](WORKFLOWS.md) and
   [adr/ADR-0009-durable-workflow-state.md](adr/ADR-0009-durable-workflow-state.md).
+- **The safe LLM & tool-calling foundation** (`app/ai/` — STORY-010):
+  a provider-independent `LLMProvider` abstraction, one real provider
+  (Anthropic Claude, via the official SDK, using its tool-use feature
+  for genuinely structured output — never prose parsed by regex), a
+  four-variant `AdministrativeDecision` schema with no chain-of-thought
+  (structurally enforced via `extra="forbid"` on every variant), a
+  deterministic code-level healthcare-safety pre-screen that runs
+  BEFORE the model is ever called, and an explicit, allowlisted
+  `ToolRegistry` (plain `dict` lookup — never `getattr`/`eval`/`exec`/
+  dynamic import/shell execution) with two real tools
+  (`check_availability`, `book_appointment`) calling the REAL existing
+  service layer. The LLM is treated as fully untrusted throughout: a
+  SERVER-CREATED `ToolExecutionContext` (never model-constructed)
+  carries the only trusted organization/user/role/patient-self-scope
+  data any tool acts on. One model decision leads to AT MOST one tool
+  execution — no autonomous multi-step loop. Every execution is fully
+  persisted via STORY-009's `WorkflowRun`/`WorkflowStep`/`WorkflowEvent`
+  (one new event type, `tool_invoked`). See
+  [AI_SAFETY.md](AI_SAFETY.md), [TOOLS.md](TOOLS.md), and
+  [adr/ADR-0010-llm-and-tool-security-boundary.md](adr/ADR-0010-llm-and-tool-security-boundary.md).
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data — this
   now explicitly includes never logging `JWT_SECRET_KEY`, issued tokens,
@@ -253,13 +273,16 @@ opposed to the appointment-overlap check, which IS race-proof — see
 [APPOINTMENTS.md](APPOINTMENTS.md)); general-purpose patient-readable
 department/practitioner discovery endpoints; malware scanning or a
 production object-storage backend for documents (see
-[DOCUMENTS.md](DOCUMENTS.md) Section 20); any LLM call; any agent
-framework or LangGraph integration; tool calling; autonomous workflow
-decision-making; a general-purpose security/compliance audit system
-(distinct from `WorkflowEvent`'s own workflow-lifecycle audit trail —
-see [WORKFLOWS.md](WORKFLOWS.md) Section 18); any frontend; public user
-registration; password reset; email verification; refresh tokens; or
-MFA.
+[DOCUMENTS.md](DOCUMENTS.md) Section 20); the final multi-agent
+architecture, agent-to-agent delegation, any LangGraph integration, or
+an autonomous multi-step decision loop (STORY-010 implements ONE model
+decision leading to AT MOST one tool call — see
+[AI_SAFETY.md](AI_SAFETY.md) Section 11); reschedule/cancel AI tools
+(see [TOOLS.md](TOOLS.md) Section 6); a general-purpose security/
+compliance audit system (distinct from `WorkflowEvent`'s own
+workflow-lifecycle audit trail — see [WORKFLOWS.md](WORKFLOWS.md)
+Section 18); any frontend; public user registration; password reset;
+email verification; refresh tokens; or MFA.
 
 ## 3. Planned Architecture (NOT Implemented)
 
@@ -310,14 +333,18 @@ Everything in this section is direction, not current behavior.
 - **Finer-grained permissions** beyond the current closed `Role` enum
   (`admin`/`staff`/`patient`), refresh tokens, and token
   revocation/session control — see [RBAC.md](RBAC.md) Sections 9 and 11.
-- **LangGraph-based agent workflows** for coordination tasks (scheduling,
-  intake, referrals, follow-ups), invoked through the service layer. Any
-  future administrative-routing agent (e.g. matching "book my cardiology
-  follow-up" to a `Department`) must respect the
-  administrative-routing-is-not-diagnosis boundary — see
-  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 14.
-- **An LLM provider abstraction** so agents/workflows are not hardcoded to
-  a single vendor (Groq / OpenAI / Anthropic).
+- **The final multi-agent architecture and LangGraph-based coordination**
+  for multi-step tasks (scheduling, intake, referrals, follow-ups)
+  spanning more than one model decision. STORY-010 built the
+  provider-independent LLM abstraction, structured-decision contract,
+  safety policy, and explicit tool registry this will be built ON TOP
+  OF (see [AI_SAFETY.md](AI_SAFETY.md) and [TOOLS.md](TOOLS.md)) — it
+  deliberately implements only ONE model decision leading to AT MOST
+  ONE tool execution, never an autonomous multi-step loop or
+  agent-to-agent delegation. Any future multi-step agent must continue
+  to respect the administrative-routing-is-not-diagnosis boundary — see
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 14 and
+  [AI_SAFETY.md](AI_SAFETY.md) Section 7.
 - **Docker** packaging for consistent local/dev/prod environments.
 - **A Next.js frontend** consuming the versioned API.
 
@@ -361,28 +388,41 @@ for mutating operations (`PatientService.create_patient`,
 check passes; repositories only ever add/flush — see
 [PATIENTS.md](PATIENTS.md) Section 6,
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 10, and
-[DATABASE.md](DATABASE.md) "Transaction Ownership Philosophy"). Once
-workflows exist, services will also decide whether a task needs one at
-all. Workflows will orchestrate multi-step agent coordination. Agents
-will never bypass their tools to act directly on the system.
+[DATABASE.md](DATABASE.md) "Transaction Ownership Philosophy").
+`AgentOrchestrationService` (STORY-010) follows the same rule for
+AI-driven execution: it never touches a repository or session directly,
+only `WorkflowService` and `ToolRegistry.execute` — see Section 5. Full
+multi-step agent coordination remains PLANNED (Section 3); STORY-010's
+model never bypasses its tools to act directly on the system, and
+neither will any future multi-step agent built on top of it.
 
 ## 5. Why Agents Will Not Directly Access the Database
 
-When agent workflows are introduced, agents will interact with data
-exclusively through explicit, narrow **tools** — never through a direct
-database session or repository call. Reasons this boundary is planned as
-structural, not just a convention:
+**Realized in STORY-010** (`app/ai/tools/` — see [TOOLS.md](TOOLS.md)):
+the model interacts with data exclusively through explicit, narrow
+**tools** — never through a direct database session or repository call.
+Verified structurally, not merely by convention: `app.ai` never imports
+`app.repositories` or `AsyncSession` in any way a model-controlled
+value could influence; every tool handler calls the SAME
+`app.services.*` functions every human-driven route already calls.
+Reasons this boundary is structural:
 
-- **Auditability**: a tool call is a discrete, loggable, reviewable action.
-  An agent with a raw database session can perform arbitrary, hard-to-audit
-  operations.
-- **Blast radius**: a tool exposes only the specific operations an agent
-  needs (e.g. "look up appointment status"), not the full read/write
-  surface of the schema.
-- **Healthcare safety boundary**: this project must not let an agent
-  autonomously take actions (e.g. modifying medical/clinical records) that
-  belong under human supervision (see Section 7). Constraining agents to
-  tools is what makes that boundary enforceable rather than aspirational.
+- **Auditability**: a tool call is a discrete, loggable, reviewable
+  action — durably recorded as a `tool_invoked` `WorkflowEvent` (see
+  [WORKFLOWS.md](WORKFLOWS.md)). A model with a raw database session
+  could perform arbitrary, hard-to-audit operations; a model restricted
+  to `ToolRegistry.execute` cannot.
+- **Blast radius**: a tool exposes only the specific operations a model
+  needs (e.g. `check_availability`, `book_appointment`), not the full
+  read/write surface of the schema.
+- **Healthcare safety boundary**: this project must not let a model
+  autonomously take actions (e.g. modifying medical/clinical records)
+  that belong under human supervision (see Section 7 and
+  [AI_SAFETY.md](AI_SAFETY.md) Section 7). Constraining the model to an
+  explicit, allowlisted set of administrative-only tools is what makes
+  that boundary enforceable rather than aspirational — no tool
+  exposing a clinical-decision capability exists, or may be added
+  without a fresh, explicit design decision.
 
 ## 6. Security Boundaries
 
