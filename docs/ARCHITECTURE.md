@@ -1,23 +1,24 @@
 # AgentCare Architecture
 
-This document describes AgentCare's backend architecture as of STORY-007
-(Appointment Booking Engine), building on STORY-006 (Department,
-Practitioner & Availability Foundation), STORY-005 (Patient Domain,
-Self-Access & Tenant-Safe API), STORY-004 (Identity, Membership & RBAC
-Foundation), STORY-003 (Organization & Facility Tenancy Foundation),
-STORY-002 (PostgreSQL & Database Foundation), and STORY-001
-(Architecture & Python Backend Foundation). It clearly separates
-**CURRENT** (what exists in the repository today) from **PLANNED**
-(direction only — not implemented). See [README.md](../README.md) for
-the same distinction applied to the project as a whole,
-[DATABASE.md](DATABASE.md) for the full database-layer detail,
-[DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the domain model itself,
-[RBAC.md](RBAC.md) for the full identity/authentication/authorization
-model, [PATIENTS.md](PATIENTS.md) for the patient domain,
+This document describes AgentCare's backend architecture as of STORY-008
+(Secure Document Management), building on STORY-007 (Appointment
+Booking Engine), STORY-006 (Department, Practitioner & Availability
+Foundation), STORY-005 (Patient Domain, Self-Access & Tenant-Safe API),
+STORY-004 (Identity, Membership & RBAC Foundation), STORY-003
+(Organization & Facility Tenancy Foundation), STORY-002 (PostgreSQL &
+Database Foundation), and STORY-001 (Architecture & Python Backend
+Foundation). It clearly separates **CURRENT** (what exists in the
+repository today) from **PLANNED** (direction only — not implemented).
+See [README.md](../README.md) for the same distinction applied to the
+project as a whole, [DATABASE.md](DATABASE.md) for the full
+database-layer detail, [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the domain
+model itself, [RBAC.md](RBAC.md) for the full identity/authentication/
+authorization model, [PATIENTS.md](PATIENTS.md) for the patient domain,
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) for the
-department/practitioner/availability domain, and
-[APPOINTMENTS.md](APPOINTMENTS.md) for the appointment booking engine
-this story adds — this document only summarizes all six.
+department/practitioner/availability domain, [APPOINTMENTS.md](APPOINTMENTS.md)
+for the appointment booking engine, and [DOCUMENTS.md](DOCUMENTS.md) for
+the secure document management capability this story adds — this
+document only summarizes all seven.
 
 ## 1. Architectural Principles
 
@@ -36,7 +37,7 @@ this story adds — this document only summarizes all six.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001 through STORY-007)
+## 2. Current Architecture (STORY-001 through STORY-008)
 
 The backend is a single Python package (`backend/app/`) — a **modular
 monolith**:
@@ -187,6 +188,24 @@ What exists today:
   SELECT-then-INSERT pre-check — see
   [APPOINTMENTS.md](APPOINTMENTS.md) and
   [adr/ADR-0007-appointment-concurrency.md](adr/ADR-0007-appointment-concurrency.md).
+- **Secure document management** (`app/models/patient_document.py`, its
+  repository/service, `app/storage/` (the storage abstraction),
+  `app/api/v1/endpoints/documents.py` — STORY-008): `PatientDocument` —
+  administrative document METADATA and a storage reference, never file
+  bytes (no `BLOB`/`bytea` column exists in PostgreSQL). Uploaded files
+  are treated as untrusted input: validated by magic-byte signature
+  against a small allowlist (PDF/JPEG/PNG), size-bounded and hashed
+  (SHA-256) DURING streaming, never fully buffered before validation.
+  `app.storage.base.DocumentStorage` is a narrow `Protocol` — the
+  service layer depends on it only, never a concrete backend directly —
+  with a filesystem-backed `LocalDocumentStorage` (LOCAL DEVELOPMENT
+  ONLY) as the sole implementation this story provides. A deliberate
+  three-phase upload state machine (`pending -> available`/`failed`)
+  reconciles PostgreSQL and object storage not sharing a transaction; a
+  database `CHECK` constraint makes "available without a persisted
+  object" a schema-level impossibility. See
+  [DOCUMENTS.md](DOCUMENTS.md) and
+  [adr/ADR-0008-document-storage-and-security.md](adr/ADR-0008-document-storage-and-security.md).
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data — this
   now explicitly includes never logging `JWT_SECRET_KEY`, issued tokens,
@@ -208,14 +227,16 @@ What does **not** exist yet: a repository or service layer for
 `Organization`/`Facility` themselves; any entity beyond `Organization`/
 `Facility`/`User`/`OrganizationMembership`/`Patient`/`Department`/
 `Practitioner`/`PractitionerDepartment`/`PractitionerAvailability`/
-`Appointment`; any CRUD API for `Organization`/`Facility`; patient
-update/delete; an appointment completion workflow; a race-proof
-(database exclusion constraint) AVAILABILITY-WINDOW-overlap check (as
-opposed to the appointment-overlap check, which IS race-proof — see
-[APPOINTMENTS.md](APPOINTMENTS.md)); general-purpose patient-readable
-department/practitioner discovery endpoints; any LLM call; any agent;
-any frontend; public user registration; password reset; email
-verification; refresh tokens; or MFA.
+`Appointment`/`PatientDocument`; any CRUD API for `Organization`/
+`Facility`; patient update/delete; an appointment completion workflow; a
+race-proof (database exclusion constraint) AVAILABILITY-WINDOW-overlap
+check (as opposed to the appointment-overlap check, which IS race-proof
+— see [APPOINTMENTS.md](APPOINTMENTS.md)); general-purpose
+patient-readable department/practitioner discovery endpoints; malware
+scanning or a production object-storage backend for documents (see
+[DOCUMENTS.md](DOCUMENTS.md) Section 20); any LLM call; any agent; any
+frontend; public user registration; password reset; email verification;
+refresh tokens; or MFA.
 
 ## 3. Planned Architecture (NOT Implemented)
 
@@ -248,10 +269,18 @@ Everything in this section is direction, not current behavior.
   departments or practitioners themselves as a patient still doesn't
   exist — see [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)
   Section 12.
+- **Malware scanning and a production object-storage backend for
+  `PatientDocument`** — STORY-008 implements signature-based validation
+  and a filesystem-backed, LOCAL DEVELOPMENT ONLY storage
+  (`LocalDocumentStorage`); a real scanning stage and an S3-compatible
+  (or similar) storage backend are both explicit prerequisites before
+  any real document upload reaches production — see
+  [DOCUMENTS.md](DOCUMENTS.md) Sections 6 and 20 and
+  [adr/ADR-0008-document-storage-and-security.md](adr/ADR-0008-document-storage-and-security.md).
 - **Further healthcare domain models** below the tenant hierarchy
-  (referrals, staff profiles, documents, etc.), as SQLAlchemy 2.x
-  `Mapped[...]` classes subclassing `app.db.base.Base` — see
-  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 19.
+  (referrals as first-class entities beyond a stored document, staff
+  profiles, etc.), as SQLAlchemy 2.x `Mapped[...]` classes subclassing
+  `app.db.base.Base` — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 19.
 - **Patient update/delete** — only create, get-by-id, list, and
   self-access exist (STORY-005) — see [PATIENTS.md](PATIENTS.md)
   Section 13.
@@ -289,10 +318,14 @@ first proven for the patient domain (`app/api/v1/endpoints/patients.py`
 `AsyncSession`), **reused unchanged for the scheduling-resource domain in
 STORY-006** (`departments.py`/`practitioners.py` →
 `DepartmentService`/`PractitionerService`/`AvailabilityService` → their
-respective repositories), **and again for the appointment booking engine
-in STORY-007** (`appointments.py` → `AppointmentService`/
-`AvailabilityQueryService` → `app.repositories.appointment`) — now
-demonstrated across three independent domains, the pattern every future
+respective repositories), **again for the appointment booking engine in
+STORY-007** (`appointments.py` → `AppointmentService`/
+`AvailabilityQueryService` → `app.repositories.appointment`), **and again
+for secure document management in STORY-008** (`documents.py` →
+`PatientDocumentService` → `app.repositories.patient_document`, with an
+additional `app.storage.DocumentStorage` collaborator the service
+depends on for object bytes — see [DOCUMENTS.md](DOCUMENTS.md)) — now
+demonstrated across four independent domains, the pattern every future
 domain resource is expected to follow. `Workflow`/`Agent`/`Tool` remain
 PLANNED (Section 3) — no agentic coordination exists yet.
 
@@ -385,6 +418,21 @@ structural, not just a convention:
   modifying another patient's appointment by supplying a different id.
   See [APPOINTMENTS.md](APPOINTMENTS.md) and
   [adr/ADR-0007-appointment-concurrency.md](adr/ADR-0007-appointment-concurrency.md).
+- `PatientDocument` (STORY-008) treats every uploaded file as UNTRUSTED
+  INPUT: validated by magic-byte signature against a small allowlist
+  (never file extension or client-declared `Content-Type` alone), never
+  executed/rendered/imported/deserialized, size-bounded and hashed
+  DURING streaming (never fully buffered into memory first), and stored
+  under a server-generated OPAQUE key a client can never choose, see, or
+  submit. `storage_key`/filesystem paths are never exposed through any
+  API response. Downloads are always served `Content-Disposition:
+  attachment` (never `inline`) with `X-Content-Type-Options: nosniff` —
+  a browser is never asked to render or guess the type of untrusted
+  content. `LocalDocumentStorage` (the only storage backend implemented)
+  defensively re-validates every path against the configured root on
+  every call, rejecting any traversal attempt regardless of how it was
+  encoded. See [DOCUMENTS.md](DOCUMENTS.md) and
+  [adr/ADR-0008-document-storage-and-security.md](adr/ADR-0008-document-storage-and-security.md).
 - The application must be able to start, and pass health checks, **without**
   any LLM API key or database connection configured. `DATABASE_URL` is
   optional at the configuration layer in every environment, and the real
@@ -524,6 +572,33 @@ tools will simply not expose clinical-decision capabilities.
   self-service with a supplied-but-ignored spoofed `patient_id`,
   cross-tenant rejection at every level, organization-wide vs.
   self-scoped listing) — all against real PostgreSQL.
+- Coverage added in STORY-008: `LocalDocumentStorage` tests (put/
+  retrieve/delete round-trips, missing-object handling, opaque-key
+  support, traversal resistance for both Unix- and Windows-style
+  attempts including absolute-path override, configured-root
+  confinement, atomic-write behavior, cleanup after a mid-stream
+  failure) using only pytest-managed temporary directories, never a
+  tracked path; `app.services.document_validation` tests (every
+  signature case — valid PDF/JPEG/PNG, empty content, plain text, a
+  renamed Windows executable, SVG, HTML, extension/content mismatch —
+  and filename sanitization — traversal stripping in both path styles,
+  control characters, truncation, fallback); `PatientDocument` model
+  tests (the `available_has_size_and_hash` `CHECK`, both composite
+  ownership FKs including cross-tenant patient and no-membership
+  uploader rejection, `storage_key` uniqueness); `PatientDocumentService`
+  tests (upload success with SHA-256/size verification, every
+  validation rejection reason, a storage-failure double proving the
+  `pending -> failed` transition and that no orphaned `available` row
+  results, an oversized-upload mid-stream rejection, delete with a
+  storage-failure double proving status is left UNCHANGED on failure);
+  and the full document upload/list/get/download/delete API
+  authorization matrix end-to-end (admin/staff/patient ×
+  upload/list/get/download, patient cannot delete at all, patient
+  cannot spoof another patient's URL, cross-tenant rejection at every
+  level, safe download headers including `Content-Disposition:
+  attachment` and `X-Content-Type-Options: nosniff`, and that
+  `storage_key` never appears in any response) — all against real
+  PostgreSQL and a temporary-directory-backed storage instance.
 - Test values (e.g. a JWT secret used only to test that `SecretStr` masking
   works, or synthetic organization/facility/user/email/password/patient/
   practitioner values) are synthetic and clearly non-production.

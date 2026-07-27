@@ -6,15 +6,16 @@ documentation is not backfilled after the fact.
 
 ## Status
 
-As of STORY-007 (Appointment Booking Engine), this index, the
+As of STORY-008 (Secure Document Management), this index, the
 [Architecture Decision Records](adr/README.md) process,
 [ARCHITECTURE.md](ARCHITECTURE.md), [DATABASE.md](DATABASE.md),
 [DOMAIN_MODEL.md](DOMAIN_MODEL.md), [RBAC.md](RBAC.md),
 [PATIENTS.md](PATIENTS.md), [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md),
-and [APPOINTMENTS.md](APPOINTMENTS.md) exist. The remaining documents
-listed below are **reserved and intentionally not yet created**. Each
-will be added when the story that needs it is implemented, so that
-documentation never describes functionality that doesn't exist yet.
+[APPOINTMENTS.md](APPOINTMENTS.md), and [DOCUMENTS.md](DOCUMENTS.md)
+exist. The remaining documents listed below are **reserved and
+intentionally not yet created**. Each will be added when the story that
+needs it is implemented, so that documentation never describes
+functionality that doesn't exist yet.
 
 ## Planned Documents
 
@@ -40,12 +41,14 @@ documentation never describes functionality that doesn't exist yet.
 implemented in STORY-004, `PATIENTS.md` (administrative patient domain,
 tenant ownership, self-access) in STORY-005,
 `SCHEDULING_RESOURCES.md` (department/practitioner/availability
-foundation) in STORY-006, and `APPOINTMENTS.md` (appointment booking,
+foundation) in STORY-006, `APPOINTMENTS.md` (appointment booking,
 rescheduling, cancellation, and genuinely race-safe double-booking
-prevention) in STORY-007 — see [RBAC.md](RBAC.md),
-[PATIENTS.md](PATIENTS.md), [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md),
-and [APPOINTMENTS.md](APPOINTMENTS.md) directly rather than the table
-above.
+prevention) in STORY-007, and `DOCUMENTS.md` (secure administrative
+document upload, storage abstraction, and lifecycle management) in
+STORY-008 — see [RBAC.md](RBAC.md), [PATIENTS.md](PATIENTS.md),
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md),
+[APPOINTMENTS.md](APPOINTMENTS.md), and [DOCUMENTS.md](DOCUMENTS.md)
+directly rather than the table above.
 
 ## Documentation Principles
 

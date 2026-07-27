@@ -123,6 +123,20 @@ statement that AgentCare is not a diagnosis or treatment system.
   ADMINISTRATIVE reason only (e.g. "patient requested") — never
   clinical content — see [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md)
   Section 10.
+- As of STORY-008, `PatientDocument` is also a real, persisted model
+  (`app/models/patient_document.py` — see
+  [docs/DOCUMENTS.md](docs/DOCUMENTS.md)). It holds document METADATA
+  only — the uploaded file's actual bytes are never stored in
+  PostgreSQL (no `BLOB`/`bytea` column exists), and no OCR, text
+  extraction, or medical/clinical interpretation of a document's
+  contents exists anywhere in this domain. Uploaded files are treated as
+  UNTRUSTED INPUT: validated by file signature (a small PDF/JPEG/PNG
+  allowlist), never executed/rendered/imported/deserialized, and never
+  committed to this repository — see
+  [docs/DOCUMENTS.md](docs/DOCUMENTS.md) Section 9. **Signature
+  validation is explicitly NOT malware scanning** — see
+  [docs/DOCUMENTS.md](docs/DOCUMENTS.md) Section 20 for the documented
+  deployment-integration boundary this story does not claim to close.
 
 ## 8. Synthetic / Anonymized Test Data Requirement
 
@@ -160,6 +174,13 @@ statement that AgentCare is not a diagnosis or treatment system.
   `AppointmentConflictError` message before it ever reaches a log
   statement or an API response (see
   [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md) Section 7).
+- As of STORY-008, the same applies to `PatientDocument`
+  request/response contents (`original_filename` in particular) —
+  `app/api/v1/endpoints/documents.py`, `app/services/document.py`, and
+  `app/storage/` do not log request/response bodies or file contents
+  today. Uploaded file BYTES are never logged under any circumstance —
+  every operation on them is a stream, digest computation, or opaque
+  storage write, never something serialized to a log line.
 
 ## 10. Medical Document Handling Considerations
 
@@ -169,8 +190,27 @@ statement that AgentCare is not a diagnosis or treatment system.
 - Uploaded/generated documents are excluded from version control
   (`uploads/`, `local_storage/` are gitignored) and must never be committed
   as fixtures unless they are clearly synthetic.
-- Document storage, access control, and retention are open design questions
-  to be addressed in a dedicated ADR before implementation, not assumed.
+- **Implemented in STORY-008** (see
+  [docs/DOCUMENTS.md](docs/DOCUMENTS.md) and
+  [docs/adr/ADR-0008-document-storage-and-security.md](docs/adr/ADR-0008-document-storage-and-security.md)):
+  `PatientDocument` administrative document metadata, a storage
+  abstraction (`app/storage/`) with a filesystem-backed LOCAL
+  DEVELOPMENT ONLY implementation, signature-based upload validation
+  (a small PDF/JPEG/PNG allowlist — never file extension or
+  client-declared `Content-Type` alone), streaming size limits, SHA-256
+  integrity hashing, opaque server-generated storage keys, and
+  soft-deletion/retirement semantics. **Malware scanning is explicitly
+  NOT implemented** — signature validation is not malware scanning; see
+  [docs/DOCUMENTS.md](docs/DOCUMENTS.md) Section 20 for the documented
+  deployment-integration boundary that must be closed before any real
+  (non-synthetic) document upload reaches production. A production
+  object-storage backend (credentialed, e.g. S3-compatible) is also not
+  yet implemented — `Settings` refuses to start the application with
+  local document storage selected outside `development`/`test`.
+- Test uploads use only synthetic, hand-constructed byte sequences
+  (never real files) and are written exclusively to pytest-managed
+  temporary directories — never `backend/local_storage/` (the real
+  configured development path) and never committed to version control.
 
 ## 11. If a Secret Is Accidentally Committed
 

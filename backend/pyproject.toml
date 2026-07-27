@@ -22,6 +22,10 @@ dependencies = [
     "pyjwt>=2.9,<3.0",
     # Required for pydantic's EmailStr, used by the login request schema.
     "email-validator>=2.2,<3.0",
+    # Required for FastAPI to parse multipart/form-data (file uploads) —
+    # see app/api/v1/endpoints/documents.py. Pure-Python, no OS-level
+    # dependency.
+    "python-multipart>=0.0.12,<1.0",
 ]
 
 [project.optional-dependencies]

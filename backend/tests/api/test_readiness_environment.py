@@ -12,9 +12,12 @@ simulate each database state (no real database connection needed) and
 `monkeypatch` + `Settings` cache clearing to vary `APP_ENV`.
 
 Every test also sets a synthetic `JWT_SECRET_KEY` (STORY-004: `Settings`
-now requires one whenever `APP_ENV` is `staging`/`production` — unrelated
-to what this file actually tests, but required for `Settings` to
-construct at all in those environments).
+now requires one whenever `APP_ENV` is `staging`/`production`) and a
+non-`local` `DOCUMENT_STORAGE_BACKEND` (STORY-008: `Settings` now
+refuses `local` document storage whenever `APP_ENV` is
+`staging`/`production` — see `app.core.config`) — both unrelated to what
+this file actually tests, but required for `Settings` to construct at
+all in those environments.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ _SYNTHETIC_JWT_SECRET = "synthetic-test-jwt-secret-do-not-use-in-production-32ch
 @pytest.fixture(autouse=True)
 def _configure_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JWT_SECRET_KEY", _SYNTHETIC_JWT_SECRET)
+    monkeypatch.setenv("DOCUMENT_STORAGE_BACKEND", "s3")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

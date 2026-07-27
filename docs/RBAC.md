@@ -1,11 +1,12 @@
 # AgentCare Identity, Authentication & Authorization (RBAC)
 
 This document describes the identity, authentication, and authorization
-foundation implemented in STORY-004, and how STORY-005/006/007 put it to
-work against real domain resources (`Patient` — see
+foundation implemented in STORY-004, and how STORY-005/006/007/008 put it
+to work against real domain resources (`Patient` — see
 [PATIENTS.md](PATIENTS.md); `Department`/`Practitioner`/availability —
 see [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md); `Appointment` —
-see [APPOINTMENTS.md](APPOINTMENTS.md)). It follows
+see [APPOINTMENTS.md](APPOINTMENTS.md); `PatientDocument` — see
+[DOCUMENTS.md](DOCUMENTS.md)). It follows
 the same CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md):
 everything described here as implemented exists in the repository today;
 anything marked PLANNED does not yet.
@@ -288,14 +289,18 @@ availability, all RBAC-enforced (STORY-006 — see
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)); `Appointment`
 booking, rescheduling, and cancellation, RBAC-enforced with patient
 self-service and server-derived (never client-trusted) patient identity
-(STORY-007 — see [APPOINTMENTS.md](APPOINTMENTS.md) Sections 15-16).
+(STORY-007 — see [APPOINTMENTS.md](APPOINTMENTS.md) Sections 15-16);
+`PatientDocument` upload/list/get/download, RBAC-enforced with the same
+server-derived patient identity, plus ADMIN/STAFF-only deletion
+(STORY-008 — see [DOCUMENTS.md](DOCUMENTS.md) Sections 15-16).
 
 **Explicitly not implemented** (belong to later stories): appointment
-completion workflow, `Document`, any workflow engine, agents, LLM
-integration, refresh tokens, password reset, email verification, MFA,
-OAuth/social login, public registration, an audit-event system, patient
-update/delete, general-purpose patient-readable department/practitioner
-discovery endpoints (as opposed to the available-times endpoint, which
-IS implemented — see [APPOINTMENTS.md](APPOINTMENTS.md)), finer-grained
+completion workflow, malware scanning, a production document-storage
+backend, any workflow engine, agents, LLM integration, refresh tokens,
+password reset, email verification, MFA, OAuth/social login, public
+registration, an audit-event system, patient update/delete,
+general-purpose patient-readable department/practitioner discovery
+endpoints (as opposed to the available-times endpoint, which IS
+implemented — see [APPOINTMENTS.md](APPOINTMENTS.md)), finer-grained
 permissions beyond `Role` (Section 11), and any CRUD API for
 `Organization`/`Facility` themselves.

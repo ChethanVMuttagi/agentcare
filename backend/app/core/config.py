@@ -59,6 +59,23 @@ class Settings(BaseSettings):
     # --- Frontend ------------------------------------------------------------------
     frontend_url: str | None = None
 
+    # --- Document storage (STORY-008) -----------------------------------------------
+    # "local" is the only backend implemented in this story — a filesystem-backed
+    # `LocalDocumentStorage` intended for local development only (see
+    # docs/DOCUMENTS.md). A future story may add "s3" (or similar) for a real
+    # object-storage-backed production deployment; until that exists,
+    # `_forbid_local_document_storage_outside_development` below refuses to start
+    # in staging/production with the local backend selected, rather than silently
+    # persisting documents to a single instance's non-durable local disk.
+    document_storage_backend: str = "local"
+    # Relative to the backend process's working directory in development (resolved
+    # to an absolute path by `app.storage.local.LocalDocumentStorage`). Covered by
+    # the repository's `local_storage/` .gitignore rule — never a tracked path.
+    document_storage_path: str = "local_storage/documents"
+    # 10 MB default — conservative for administrative documents (identity,
+    # insurance, referral, consent scans); see docs/DOCUMENTS.md "File Size".
+    document_max_upload_bytes: int = 10 * 1024 * 1024
+
     @model_validator(mode="after")
     def _forbid_debug_in_production(self) -> Settings:
         if self.app_env is Environment.PRODUCTION and self.debug:
@@ -74,6 +91,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "JWT_SECRET_KEY must be set when APP_ENV is staging or production — "
                 "the application must not silently sign/verify tokens without a real secret."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _forbid_local_document_storage_outside_development(self) -> Settings:
+        if (
+            self.app_env in (Environment.STAGING, Environment.PRODUCTION)
+            and self.document_storage_backend == "local"
+        ):
+            raise ValueError(
+                "DOCUMENT_STORAGE_BACKEND=local must not be used when APP_ENV is "
+                "staging or production — local filesystem storage is not durable "
+                "or shared across instances. Configure a real object-storage "
+                "backend before deploying document upload functionality; the "
+                "application refuses to start with an inappropriate storage "
+                "configuration rather than silently persisting documents "
+                "somewhere unsuitable for production. See docs/DOCUMENTS.md."
             )
         return self
 

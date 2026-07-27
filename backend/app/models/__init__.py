@@ -14,6 +14,12 @@ from app.models.facility import Facility, FacilityType
 from app.models.membership import OrganizationMembership, Role
 from app.models.organization import Organization, OrganizationType
 from app.models.patient import Patient
+from app.models.patient_document import (
+    DocumentMediaType,
+    DocumentStatus,
+    DocumentType,
+    PatientDocument,
+)
 from app.models.practitioner import Practitioner, PractitionerType
 from app.models.practitioner_availability import DayOfWeek, PractitionerAvailability
 from app.models.practitioner_department import PractitionerDepartment
@@ -24,12 +30,16 @@ __all__ = [
     "AppointmentStatus",
     "DayOfWeek",
     "Department",
+    "DocumentMediaType",
+    "DocumentStatus",
+    "DocumentType",
     "Facility",
     "FacilityType",
     "Organization",
     "OrganizationMembership",
     "OrganizationType",
     "Patient",
+    "PatientDocument",
     "Practitioner",
     "PractitionerAvailability",
     "PractitionerDepartment",

@@ -129,18 +129,52 @@ or agent workflows exist.
   PostgreSQL extension), applied to and validated against real
   PostgreSQL. See [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md) and
   [docs/adr/ADR-0007-appointment-concurrency.md](docs/adr/ADR-0007-appointment-concurrency.md).
+- **Secure document management**
+  (`backend/app/models/patient_document.py`; `backend/app/storage/`
+  (the storage abstraction); its repository/service;
+  `backend/app/api/v1/endpoints/documents.py`): `PatientDocument` —
+  administrative document METADATA and a storage reference; **file bytes
+  are never stored in PostgreSQL** (no `BLOB`/`bytea` column exists).
+  Uploaded files are treated as **untrusted input**: validated by
+  magic-byte signature against a small allowlist (PDF/JPEG/PNG — never
+  file extension or client-declared `Content-Type` alone), size-bounded
+  and SHA-256-hashed DURING streaming (never fully buffered first), and
+  written to storage under a server-generated OPAQUE key a client can
+  never choose or see. `app.storage.base.DocumentStorage` is a narrow
+  interface the service depends on, never a concrete backend directly —
+  `LocalDocumentStorage` (filesystem-backed, LOCAL DEVELOPMENT ONLY) is
+  the only implementation this story provides. A deliberate three-phase
+  upload state machine (`pending -> available`/`failed`) reconciles
+  PostgreSQL and object storage not sharing a transaction; a database
+  `CHECK` constraint makes "available without a persisted object" a
+  schema-level impossibility. `ADMIN`/`STAFF` may
+  upload/list/get/download/delete any patient's documents; `PATIENT` may
+  upload/list/get/download only their OWN documents and can never
+  delete one (a deliberate, conservative policy). Downloads are served
+  with safe headers (`Content-Disposition: attachment`,
+  `X-Content-Type-Options: nosniff`) and never expose a storage path.
+  **Malware scanning is explicitly NOT implemented** — signature
+  validation is not malware scanning, and this is documented as a
+  deployment-integration boundary, not silently assumed away. Backed by
+  AgentCare's sixth Alembic migration, applied to and validated against
+  real PostgreSQL. See [docs/DOCUMENTS.md](docs/DOCUMENTS.md) and
+  [docs/adr/ADR-0008-document-storage-and-security.md](docs/adr/ADR-0008-document-storage-and-security.md).
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app,
   real (SQLite-backed, for isolation) infrastructure-level database
-  behavior, all ten domain models, password hashing, JWT handling, the
-  auth API, the full patient/department/practitioner/availability/
-  appointment repository/service/API layers end-to-end against real
-  PostgreSQL, and a dedicated real-concurrency test proving the
+  behavior, all eleven domain models, password hashing, JWT handling,
+  the auth API, the full patient/department/practitioner/availability/
+  appointment/document repository/service/API layers end-to-end against
+  real PostgreSQL, a dedicated real-concurrency test proving the
   appointment double-booking guarantee under genuinely concurrent
-  transactions
+  transactions, and filesystem-storage/file-signature tests using only
+  temporary directories (never a tracked path)
 
 **Not yet implemented** (planned, across future stories):
 - A CRUD API, service, and repository layer for `Organization`/`Facility`
 - Appointment completion workflow (clinical-encounter concept), waitlists
+- Malware scanning and a production (e.g. S3-compatible) object-storage
+  backend for documents — see [docs/DOCUMENTS.md](docs/DOCUMENTS.md)
+  Section 20
 - Race-proof (database exclusion constraint) AVAILABILITY-WINDOW-overlap
   prevention (as opposed to appointment-overlap prevention, which IS
   race-proof — see [docs/APPOINTMENTS.md](docs/APPOINTMENTS.md));
@@ -196,12 +230,13 @@ recommendation, or any function that constitutes the practice of medicine.
 |---|---|---|
 | Backend API | Python, FastAPI | Implemented |
 | Configuration | Pydantic Settings | Implemented |
-| Database | PostgreSQL | Implemented (10 tables — see below) |
-| ORM | SQLAlchemy 2.x | Implemented (10 models, incl. composite-FK ownership integrity + GiST `EXCLUDE` constraints) |
-| Migrations | Alembic | Implemented (5 migrations, validated against real PostgreSQL) |
+| Database | PostgreSQL | Implemented (11 tables — see below) |
+| ORM | SQLAlchemy 2.x | Implemented (11 models, incl. composite-FK ownership integrity + GiST `EXCLUDE` constraints) |
+| Migrations | Alembic | Implemented (6 migrations, validated against real PostgreSQL) |
 | Authentication | Argon2id password hashing + JWT (PyJWT) | Implemented (`POST /auth/token`, `GET /auth/me`) |
-| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient + scheduling-resource + appointment APIs |
-| Repository/Service layers | `app/repositories/`, `app/services/` | Implemented for `Patient`, scheduling resources, and `Appointment`; not yet for `Organization`/`Facility` |
+| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient + scheduling-resource + appointment + document APIs |
+| Repository/Service layers | `app/repositories/`, `app/services/` | Implemented for `Patient`, scheduling resources, `Appointment`, and `PatientDocument`; not yet for `Organization`/`Facility` |
+| Document storage | `app/storage/` (`DocumentStorage` abstraction) | Implemented — filesystem-backed `LocalDocumentStorage` (local dev only); production object-storage backend planned |
 | Agent Orchestration | LangGraph | Planned |
 | LLM Access | Provider-abstracted (Groq / OpenAI / Anthropic) | Planned |
 | Frontend | Next.js | Planned |
@@ -210,12 +245,14 @@ recommendation, or any function that constitutes the practice of medicine.
 The database layer is implemented and tested, but scoped narrowly:
 `organizations`, `facilities`, `users`, `organization_memberships`,
 `patients`, `departments`, `practitioners`, `practitioner_departments`,
-`practitioner_availability`, and `appointments` are the only tables that
-exist, and there is no CRUD API for `Organization`/`Facility` — see
+`practitioner_availability`, `appointments`, and `patient_documents` are
+the only tables that exist, and there is no CRUD API for
+`Organization`/`Facility` — see
 [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md), [docs/RBAC.md](docs/RBAC.md),
 [docs/PATIENTS.md](docs/PATIENTS.md),
-[docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md), and
-[docs/APPOINTMENTS.md](docs/APPOINTMENTS.md).
+[docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md),
+[docs/APPOINTMENTS.md](docs/APPOINTMENTS.md), and
+[docs/DOCUMENTS.md](docs/DOCUMENTS.md).
 
 ## Repository Structure
 
@@ -225,20 +262,21 @@ agentcare/
 │   ├── app/
 │   │   ├── main.py       # Application factory (+ lifespan): create_app()
 │   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready/auth/
-│   │   │                 # patients/departments/practitioners/appointments)
+│   │   │                 # patients/departments/practitioners/appointments/documents)
 │   │   ├── auth/          # Password hashing, JWT, auth service, auth dependencies
 │   │   ├── core/         # Settings, logging, exceptions
 │   │   ├── db/            # Async SQLAlchemy engine/session, DB health check
 │   │   ├── models/         # Organization, Facility, User, OrganizationMembership,
 │   │   │                   # Patient, Department, Practitioner, PractitionerDepartment,
-│   │   │                   # PractitionerAvailability, Appointment
+│   │   │                   # PractitionerAvailability, Appointment, PatientDocument
 │   │   ├── repositories/   # Tenant-scoped persistence/query only, per resource
 │   │   ├── services/       # Business rules + transaction ownership, per resource
+│   │   ├── storage/       # DocumentStorage abstraction + LocalDocumentStorage
 │   │   └── schemas/      # Shared Pydantic schemas (errors, health, auth, patient,
-│   │                     # department, practitioner, availability, appointment)
+│   │                     # department, practitioner, availability, appointment, document)
 │   ├── migrations/        # Alembic migrations (org+facility; users+memberships;
 │   │                       # patients; department+practitioner+availability;
-│   │                       # appointments + btree_gist)
+│   │                       # appointments + btree_gist; patient_documents)
 │   ├── alembic.ini
 │   ├── tests/            # Backend test suite
 │   └── pyproject.toml    # Backend dependencies + tool configuration
@@ -251,6 +289,7 @@ agentcare/
 │   ├── PATIENTS.md        # Administrative patient domain, tenant ownership, self-access
 │   ├── SCHEDULING_RESOURCES.md  # Department/Practitioner/availability domain
 │   ├── APPOINTMENTS.md    # Appointment booking, concurrency safety, RBAC
+│   ├── DOCUMENTS.md       # Secure document upload, storage abstraction, RBAC
 │   └── adr/              # Architecture Decision Records
 ├── infrastructure/      # Deployment/infra config (not yet implemented)
 ├── scripts/             # Developer/operational scripts (not yet implemented)
@@ -315,15 +354,20 @@ tables (identity and role-based membership — see
 patient records — see [docs/PATIENTS.md](docs/PATIENTS.md)), the
 `departments`/`practitioners`/`practitioner_departments`/
 `practitioner_availability` tables (administrative scheduling resources
-— see [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md)), and
-the `appointments` table plus the `btree_gist` PostgreSQL extension
+— see [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md)), the
+`appointments` table plus the `btree_gist` PostgreSQL extension
 (genuinely race-safe booking, rescheduling, and cancellation — see
-[docs/APPOINTMENTS.md](docs/APPOINTMENTS.md)). See
+[docs/APPOINTMENTS.md](docs/APPOINTMENTS.md)), and the
+`patient_documents` table (administrative document metadata — never
+file bytes — plus a storage reference; see
+[docs/DOCUMENTS.md](docs/DOCUMENTS.md)). See
 [docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow and
 testing strategy (SQLite is used only for isolated infrastructure-level
 tests; PostgreSQL remains the production database and is what every
 domain model, repository, service, and API test suite — including a
-dedicated real-concurrency test — runs against).
+dedicated real-concurrency test — runs against; document storage tests
+use only pytest-managed temporary directories, never the real configured
+`DOCUMENT_STORAGE_PATH`).
 
 Run the test suite and quality checks from `backend/`:
 

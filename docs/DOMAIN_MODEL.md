@@ -1,27 +1,30 @@
 # AgentCare Domain Model
 
 This document describes AgentCare's domain persistence model as of
-STORY-007 (Appointment Booking Engine), building on STORY-006
-(Department, Practitioner & Availability Foundation), STORY-005 (Patient
-Domain, Self-Access & Tenant-Safe API), STORY-004 (Identity, Membership &
-RBAC Foundation), and STORY-003 (Organization & Facility Tenancy
-Foundation). It follows the same CURRENT vs. PLANNED discipline as
-[ARCHITECTURE.md](ARCHITECTURE.md) and [DATABASE.md](DATABASE.md):
-everything described here as implemented exists in the repository and
-the database schema today; anything marked PLANNED does not yet.
+STORY-008 (Secure Document Management), building on STORY-007
+(Appointment Booking Engine), STORY-006 (Department, Practitioner &
+Availability Foundation), STORY-005 (Patient Domain, Self-Access &
+Tenant-Safe API), STORY-004 (Identity, Membership & RBAC Foundation), and
+STORY-003 (Organization & Facility Tenancy Foundation). It follows the
+same CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md)
+and [DATABASE.md](DATABASE.md): everything described here as implemented
+exists in the repository and the database schema today; anything marked
+PLANNED does not yet.
 
 No CRUD API exists for `Organization`/`Facility`. A minimal, focused auth
 API exists for identity (`POST /api/v1/auth/token`, `GET /api/v1/auth/me`
 — see [RBAC.md](RBAC.md)). Tenant-scoped, RBAC-protected APIs exist for
 `Patient` (see [PATIENTS.md](PATIENTS.md)), for `Department`/
 `Practitioner`/availability (see
-[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)), and for
-`Appointment` booking/rescheduling/cancellation (see
-[APPOINTMENTS.md](APPOINTMENTS.md), the authoritative document for
-`Appointment`'s full schema, concurrency mechanism, and API — this
-document covers it only at the level of the rest of the domain model
-below). Routes/services/repositories for `Organization`/`Facility`
-themselves still don't exist; they come in a later story.
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)), for `Appointment`
+booking/rescheduling/cancellation (see
+[APPOINTMENTS.md](APPOINTMENTS.md)), and for `PatientDocument` upload/
+retrieval/deletion (see [DOCUMENTS.md](DOCUMENTS.md), the authoritative
+document for `PatientDocument`'s full schema, storage abstraction, and
+API — this document covers it only at the level of the rest of the
+domain model below). Routes/services/repositories for
+`Organization`/`Facility` themselves still don't exist; they come in a
+later story.
 
 ## 1. Tenant Hierarchy & Identity
 
@@ -42,6 +45,9 @@ erDiagram
     PATIENT ||--o{ APPOINTMENT : "books"
     PRACTITIONER ||--o{ APPOINTMENT : "is booked for"
     DEPARTMENT ||--o{ APPOINTMENT : "is booked within"
+    ORGANIZATION ||--o{ PATIENT_DOCUMENT : "has"
+    PATIENT ||--o{ PATIENT_DOCUMENT : "has"
+    USER ||--o{ PATIENT_DOCUMENT : "uploads"
     ORGANIZATION {
         uuid id PK
         string name
@@ -146,6 +152,21 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
     }
+    PATIENT_DOCUMENT {
+        uuid id PK
+        uuid organization_id FK
+        uuid patient_id FK
+        uuid uploaded_by_user_id FK
+        string document_type
+        string status
+        string original_filename
+        string storage_key UK
+        string media_type
+        bigint size_bytes "nullable"
+        string sha256 "nullable"
+        timestamptz created_at
+        timestamptz updated_at
+    }
 ```
 
 ```
@@ -162,8 +183,10 @@ Organization (tenant boundary)
   ├── Patient (administrative patient record, owned by this Organization)
   │     ↑ (optional)
   │    User (a Patient MAY be linked to a portal User identity)
-  └── Appointment (a concrete, dated booking — Patient + Practitioner +
-        Department + a UTC time range; see APPOINTMENTS.md)
+  ├── Appointment (a concrete, dated booking — Patient + Practitioner +
+  │     Department + a UTC time range; see APPOINTMENTS.md)
+  └── PatientDocument (administrative document metadata + storage
+        reference — Patient + uploading User; see DOCUMENTS.md)
 ```
 
 **Organization** is AgentCare's tenant boundary — it represents the
@@ -188,7 +211,11 @@ scheduling-resource model. **Appointment** (STORY-007) is a concrete,
 dated booking of a Patient against a Practitioner's availability, within
 a Department — see [APPOINTMENTS.md](APPOINTMENTS.md) for the full
 model, including its PostgreSQL-native concurrency-safety mechanism.
-Nothing further below this (documents, etc.) exists yet — see Section 19.
+**PatientDocument** (STORY-008) is administrative document metadata plus
+an object-storage reference — never the file's bytes — for one Patient,
+recording which User uploaded it; see [DOCUMENTS.md](DOCUMENTS.md) for
+the full model, the storage abstraction, and the upload state machine.
+Nothing further below this exists yet — see Section 19.
 
 ## 2. Organization
 
@@ -444,7 +471,7 @@ diverge, and `UNIQUE(email)` is enforced against the *normalized* form
 
 ## 12. Identifiers
 
-All ten models use **UUID primary keys generated in the application**
+All eleven models use **UUID primary keys generated in the application**
 (`uuid.uuid4()`, via `UUIDPrimaryKeyMixin` — see
 [DATABASE.md](DATABASE.md)), not database-generated ids (e.g. Postgres
 `gen_random_uuid()`) and not auto-incrementing integers. This is portable
@@ -590,6 +617,11 @@ or raw SQL (verified in `tests/models/`).
 | `ex_appointments_practitioner_no_overlap` (GiST EXCLUDE, `WHERE status = 'booked'`) | `appointments` | Genuinely race-safe practitioner double-booking prevention — see [APPOINTMENTS.md](APPOINTMENTS.md) Section 7 |
 | `ex_appointments_patient_no_overlap` (GiST EXCLUDE, `WHERE status = 'booked'`) | `appointments` | Genuinely race-safe patient double-booking prevention |
 | `ix_appointments_practitioner_start_at` / `ix_appointments_patient_start_at` | `appointments` | Support availability-conflict and appointment-listing queries |
+| `fk_patient_documents_org_patient_patients` (`ON DELETE RESTRICT`, composite) | `patient_documents` | The document's patient must exist AND belong to the SAME organization — see [DOCUMENTS.md](DOCUMENTS.md) Section 5 |
+| `fk_patient_documents_org_uploader_memberships` (`ON DELETE RESTRICT`, composite) | `patient_documents` | The uploader must have (had) a real membership in the SAME organization — existence only, not currently-active (a service-level check) |
+| `ck_patient_documents_available_has_size_and_hash` | `patient_documents` | `status <> 'available' OR (size_bytes IS NOT NULL AND sha256 IS NOT NULL)` — an `available` row can never lack proof of a persisted object |
+| `uq_patient_documents_storage_key` | `patient_documents` | Two documents can never collide on the same storage location |
+| `ix_patient_documents_patient_created_at` | `patient_documents` | Supports the patient-scoped, newest-first document listing query |
 
 No indexes were added mechanically to every column — each index above
 supports a genuinely expected, already-identified access pattern;
@@ -735,19 +767,24 @@ independent concurrent transactions, not sequential simulation) — see
 `Department`, `Practitioner`, `PractitionerDepartment`,
 `PractitionerAvailability` (STORY-006); `Appointment` (STORY-007) —
 booking, rescheduling, cancellation, and genuinely race-safe double-
-booking prevention (see [APPOINTMENTS.md](APPOINTMENTS.md)).
+booking prevention (see [APPOINTMENTS.md](APPOINTMENTS.md));
+`PatientDocument` (STORY-008) — administrative document upload, storage
+abstraction, signature validation, and lifecycle management (see
+[DOCUMENTS.md](DOCUMENTS.md)).
 
 **Explicitly not implemented yet** (belong to later stories): patient
-update/delete, appointment completion workflow, waitlists, `Document`,
-`WorkflowRun`, any audit system, agents, tools, any clinical/medical data
-anywhere in the domain, and any CRUD API for `Organization`/`Facility`
-themselves. See [RBAC.md](RBAC.md) Section 12 for the identity/
-authorization-specific current-vs-planned breakdown,
-[PATIENTS.md](PATIENTS.md) Section 13 for the patient-domain-specific
-breakdown, [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 16
-for the scheduling-resource-specific breakdown, and
-[APPOINTMENTS.md](APPOINTMENTS.md) Section 21 for the appointment-
-specific breakdown.
+update/delete, appointment completion workflow, waitlists, malware
+scanning, a production object-storage backend, `WorkflowRun`, any audit
+system, agents, tools, any clinical/medical data anywhere in the domain,
+and any CRUD API for `Organization`/`Facility` themselves. See
+[RBAC.md](RBAC.md) Section 12 for the identity/authorization-specific
+current-vs-planned breakdown, [PATIENTS.md](PATIENTS.md) Section 13 for
+the patient-domain-specific breakdown,
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 16 for the
+scheduling-resource-specific breakdown, [APPOINTMENTS.md](APPOINTMENTS.md)
+Section 21 for the appointment-specific breakdown, and
+[DOCUMENTS.md](DOCUMENTS.md) Section 23 for the document-specific
+breakdown.
 
 ## 20. Planned Direction (NOT Implemented)
 
@@ -765,6 +802,12 @@ specific breakdown.
   STORY-007; no clinical-encounter concept (checked in, seen, checked
   out) exists to drive it yet ([APPOINTMENTS.md](APPOINTMENTS.md)
   Section 11).
+- **Malware scanning and a production object-storage backend** for
+  `PatientDocument` — STORY-008 implements signature validation and a
+  filesystem-backed LOCAL DEVELOPMENT storage only; a real scanning
+  stage and an S3-compatible (or similar) storage backend are both
+  explicit deployment prerequisites before real document uploads, not
+  yet built ([DOCUMENTS.md](DOCUMENTS.md) Sections 6 and 20).
 - **Race-proof AVAILABILITY-WINDOW-overlap prevention** (a database
   exclusion constraint on `practitioner_availability` itself, as opposed
   to `appointments`, which STORY-007 DID make race-safe — see

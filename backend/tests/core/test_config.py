@@ -29,6 +29,7 @@ def test_production_cannot_enable_debug() -> None:
             app_env=Environment.PRODUCTION,
             debug=True,
             jwt_secret_key="synthetic-test-secret-value",
+            document_storage_backend="s3",
         )
 
 
@@ -37,6 +38,7 @@ def test_production_debug_defaults_false() -> None:
         _env_file=None,
         app_env=Environment.PRODUCTION,
         jwt_secret_key="synthetic-test-secret-value",
+        document_storage_backend="s3",
     )
     assert settings.debug is False
 
@@ -56,7 +58,10 @@ def test_staging_or_production_without_jwt_secret_key_is_rejected() -> None:
 def test_staging_or_production_with_jwt_secret_key_is_accepted() -> None:
     for env in (Environment.STAGING, Environment.PRODUCTION):
         settings = Settings(
-            _env_file=None, app_env=env, jwt_secret_key="synthetic-test-secret-value"
+            _env_file=None,
+            app_env=env,
+            jwt_secret_key="synthetic-test-secret-value",
+            document_storage_backend="s3",
         )
         assert settings.app_env is env
 
@@ -71,3 +76,38 @@ def test_jwt_defaults_are_reasonable() -> None:
     settings = Settings(_env_file=None)
     assert settings.jwt_algorithm == "HS256"
     assert settings.jwt_access_token_expire_minutes == 30
+
+
+def test_defaults_include_local_document_storage() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.document_storage_backend == "local"
+    assert settings.document_storage_path == "local_storage/documents"
+    assert settings.document_max_upload_bytes == 10 * 1024 * 1024
+
+
+def test_staging_or_production_with_local_document_storage_is_rejected() -> None:
+    for env in (Environment.STAGING, Environment.PRODUCTION):
+        with pytest.raises(ValidationError):
+            Settings(
+                _env_file=None,
+                app_env=env,
+                jwt_secret_key="synthetic-test-secret-value",
+                document_storage_backend="local",
+            )
+
+
+def test_staging_or_production_with_non_local_document_storage_is_accepted() -> None:
+    for env in (Environment.STAGING, Environment.PRODUCTION):
+        settings = Settings(
+            _env_file=None,
+            app_env=env,
+            jwt_secret_key="synthetic-test-secret-value",
+            document_storage_backend="s3",
+        )
+        assert settings.document_storage_backend == "s3"
+
+
+def test_development_and_test_allow_local_document_storage() -> None:
+    for env in (Environment.DEVELOPMENT, Environment.TEST):
+        settings = Settings(_env_file=None, app_env=env)
+        assert settings.document_storage_backend == "local"

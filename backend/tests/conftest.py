@@ -13,8 +13,10 @@ data is ever actually persisted. Only obviously-synthetic data
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, date, datetime, time, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -31,10 +33,18 @@ from app.models.facility import Facility, FacilityType
 from app.models.membership import OrganizationMembership, Role
 from app.models.organization import Organization, OrganizationType
 from app.models.patient import Patient
+from app.models.patient_document import (
+    DocumentMediaType,
+    DocumentStatus,
+    DocumentType,
+    PatientDocument,
+)
 from app.models.practitioner import Practitioner, PractitionerType
 from app.models.practitioner_availability import DayOfWeek, PractitionerAvailability
 from app.models.practitioner_department import PractitionerDepartment
 from app.models.user import User
+from app.storage.factory import get_document_storage
+from app.storage.local import LocalDocumentStorage
 
 
 @pytest.fixture()
@@ -94,6 +104,36 @@ async def client_with_db(app: FastAPI, db_session: AsyncSession) -> AsyncIterato
         yield db_session
 
     app.dependency_overrides[get_db_session] = _override
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client
+
+
+@pytest.fixture()
+def local_storage(tmp_path: Path) -> LocalDocumentStorage:
+    """A `LocalDocumentStorage` rooted at a pytest-managed temporary
+    directory — isolated per test, never a tracked source path, and
+    cleaned up automatically by pytest afterward. Never point storage
+    tests at `backend/local_storage/` (the real configured dev path)."""
+    return LocalDocumentStorage(tmp_path / "documents")
+
+
+@pytest.fixture()
+async def client_with_storage(
+    app: FastAPI, db_session: AsyncSession, local_storage: LocalDocumentStorage
+) -> AsyncIterator[AsyncClient]:
+    """Like `client_with_db`, plus overrides `get_document_storage` to use
+    an isolated, temporary-directory-backed `LocalDocumentStorage` —
+    never the real configured `DOCUMENT_STORAGE_PATH`."""
+
+    async def _db_override() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    def _storage_override() -> LocalDocumentStorage:
+        return local_storage
+
+    app.dependency_overrides[get_db_session] = _db_override
+    app.dependency_overrides[get_document_storage] = _storage_override
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client
@@ -414,5 +454,54 @@ def make_appointment(
         db_session.add(appointment)
         await db_session.flush()
         return appointment
+
+    return _make
+
+
+@pytest.fixture()
+def make_patient_document(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[PatientDocument]]:
+    """Factory for a synthetic, flushed (never committed) `PatientDocument`.
+
+    Does NOT validate uploader membership, file content, or storage
+    orchestration itself (that is `app.services.document`'s job) — this
+    is a raw factory for model-level and repository-level tests. The
+    caller is responsible for `uploaded_by_user_id` referencing a user
+    with an ACTUAL `OrganizationMembership` in `organization` (the
+    composite FK requires it — see `app/models/patient_document.py`).
+    `storage_key` defaults to a unique, opaque-looking value per call so
+    tests don't collide on the `UNIQUE(storage_key)` constraint unless
+    deliberately testing that.
+    """
+
+    async def _make(
+        organization: Organization,
+        patient: Patient,
+        uploaded_by_user_id: uuid.UUID,
+        *,
+        document_type: DocumentType = DocumentType.OTHER,
+        status: DocumentStatus = DocumentStatus.AVAILABLE,
+        original_filename: str = "synthetic-document.pdf",
+        storage_key: str | None = None,
+        media_type: DocumentMediaType = DocumentMediaType.PDF,
+        size_bytes: int | None = 1024,
+        sha256: str | None = "0" * 64,
+    ) -> PatientDocument:
+        document = PatientDocument(
+            organization_id=organization.id,
+            patient_id=patient.id,
+            uploaded_by_user_id=uploaded_by_user_id,
+            document_type=document_type,
+            status=status,
+            original_filename=original_filename,
+            storage_key=storage_key or f"{organization.id.hex}/{uuid.uuid4().hex}",
+            media_type=media_type,
+            size_bytes=size_bytes if status == DocumentStatus.AVAILABLE else None,
+            sha256=sha256 if status == DocumentStatus.AVAILABLE else None,
+        )
+        db_session.add(document)
+        await db_session.flush()
+        return document
 
     return _make

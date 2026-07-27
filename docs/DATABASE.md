@@ -5,23 +5,28 @@ extended in STORY-003 (the first real domain tables and migration),
 STORY-004 (identity/membership tables and a second migration),
 STORY-005 (the `patients` table and a third migration), STORY-006
 (department/practitioner/availability tables and a fourth migration),
-and STORY-007 (the `appointments` table, a fifth migration, and the
-`btree_gist` PostgreSQL extension) — see
-[DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself,
+STORY-007 (the `appointments` table, a fifth migration, and the
+`btree_gist` PostgreSQL extension), and STORY-008 (the
+`patient_documents` table and a sixth migration — metadata only, no file
+bytes) — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself,
 [RBAC.md](RBAC.md) for the identity/authorization model,
 [PATIENTS.md](PATIENTS.md) for the patient domain,
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) for the scheduling-
-resource domain, and [APPOINTMENTS.md](APPOINTMENTS.md) for the
-appointment booking engine these tables back. It follows the same
-CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md):
-everything described here as implemented exists in the repository
-today; anything marked PLANNED does not yet.
+resource domain, [APPOINTMENTS.md](APPOINTMENTS.md) for the appointment
+booking engine, and [DOCUMENTS.md](DOCUMENTS.md) for the secure document
+management capability these tables back. It follows the same CURRENT
+vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md): everything
+described here as implemented exists in the repository today; anything
+marked PLANNED does not yet.
 
-Ten domain tables exist so far: `organizations`, `facilities`, `users`,
-`organization_memberships`, `patients`, `departments`, `practitioners`,
-`practitioner_departments`, `practitioner_availability`, and
-`appointments` — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md). No other
-healthcare domain tables exist yet.
+Eleven domain tables exist so far: `organizations`, `facilities`,
+`users`, `organization_memberships`, `patients`, `departments`,
+`practitioners`, `practitioner_departments`, `practitioner_availability`,
+`appointments`, and `patient_documents` — see
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md). No other healthcare domain tables
+exist yet, and no table anywhere in this schema stores file bytes
+(`BLOB`/`bytea`) — `patient_documents` holds metadata and a storage
+reference only (see [DOCUMENTS.md](DOCUMENTS.md) Section 2).
 
 ## 1. PostgreSQL as Production System of Record
 
@@ -44,26 +49,31 @@ The ORM/Core layer is SQLAlchemy 2.x, using its modern declarative style:
   `app/models/user.py` and `app/models/membership.py` (STORY-004),
   `app/models/patient.py` (STORY-005), `app/models/department.py`,
   `practitioner.py`, `practitioner_department.py`,
-  `practitioner_availability.py` (STORY-006), and
-  `app/models/appointment.py` (STORY-007) are the real
+  `practitioner_availability.py` (STORY-006),
+  `app/models/appointment.py` (STORY-007), and
+  `app/models/patient_document.py` (STORY-008) are the real
   `Mapped[...]`-typed model classes — SQLAlchemy 2.x's native typed
   mapping (`Mapped[str]`, `mapped_column(...)`), not the legacy 1.x
   style. See [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the models themselves
   and `app/db/mixins.py` for the shared `UUIDPrimaryKeyMixin`/
   `TimestampMixin` they're built on.
 - Enum-backed columns (`OrganizationType`, `FacilityType`, `Role`,
-  `PractitionerType`, `DayOfWeek`, and — as of STORY-007 —
-  `AppointmentStatus`) use SQLAlchemy's `Enum` type with
-  `native_enum=False` (VARCHAR + a real `CHECK` constraint, not a native
-  PostgreSQL `ENUM` type) and `values_callable` (persist each member's
-  lowercase `.value`, not its uppercase Python name) — see
-  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 14 for the full rationale.
+  `PractitionerType`, `DayOfWeek`, `AppointmentStatus`, and — as of
+  STORY-008 — `DocumentType`/`DocumentStatus`/`DocumentMediaType`) use
+  SQLAlchemy's `Enum` type with `native_enum=False` (VARCHAR + a real
+  `CHECK` constraint, not a native PostgreSQL `ENUM` type) and
+  `values_callable` (persist each member's lowercase `.value`, not its
+  uppercase Python name) — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md)
+  Section 14 for the full rationale.
 - **Composite foreign keys** (introduced in STORY-006, extended in
-  STORY-007): `Department`, `PractitionerDepartment`,
-  `PractitionerAvailability`, and (STORY-007) `Appointment` each hold a
-  multi-column `ForeignKeyConstraint` (in addition to, or instead of,
-  single-column ones) to enforce tenant/facility/assignment ownership
-  integrity at the database level rather than relying solely on
+  STORY-007/008): `Department`, `PractitionerDepartment`,
+  `PractitionerAvailability`, `Appointment` (STORY-007), and
+  `PatientDocument` (STORY-008 — TWO composite FKs: patient ownership,
+  and uploader-membership existence, see
+  [DOCUMENTS.md](DOCUMENTS.md) Section 5) each hold a multi-column
+  `ForeignKeyConstraint` (in addition to, or instead of, single-column
+  ones) to enforce tenant/facility/assignment ownership integrity at the
+  database level rather than relying solely on
   application checks — see
   [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Sections 4–5, 7,
   [APPOINTMENTS.md](APPOINTMENTS.md) Section 6, and ADR-0006/ADR-0007
@@ -339,6 +349,28 @@ Alembic is configured under `backend/` (`backend/alembic.ini`,
   downgraded one step (with all prior tables' data confirmed untouched,
   and the extension dropped), and re-applied cleanly. Contains no
   seeded appointments or credentials of any kind — only schema DDL.
+- **Sixth migration (STORY-008)**: `f4702bbc0be1_create_patient_documents_table.py`
+  (`down_revision = "c6674a696c08"`) creates the `patient_documents`
+  table — composite ownership FKs (`organization_id`+`patient_id`
+  against `patients`, `organization_id`+`uploaded_by_user_id` against
+  `organization_memberships`), the `document_type`/`document_status`/
+  `document_media_type` `CHECK` constraints, the
+  `available_has_size_and_hash` `CHECK`, `UNIQUE(storage_key)`, and
+  supporting indexes — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 15
+  and [DOCUMENTS.md](DOCUMENTS.md) for the schema itself. A single,
+  self-contained table requiring no cross-migration operation reordering
+  (unlike the fourth/fifth migrations) — every table it references
+  already carries the composite unique constraint its FKs target.
+  Validated against real PostgreSQL: applied, inspected (columns, all
+  composite and simple FKs, `CHECK` constraints, the unique constraint),
+  a direct raw-SQL smoke test proving the `available_has_size_and_hash`
+  `CHECK` rejects an `available` row with `NULL` `size_bytes`/`sha256`
+  while a `pending` row with the same `NULL`s succeeds, a cross-tenant
+  patient FK mismatch is rejected, an uploader with no membership in the
+  target organization is rejected, and a duplicate `storage_key` is
+  rejected, downgraded one step (with all prior tables' data confirmed
+  untouched), and re-applied cleanly. Contains no seeded documents,
+  file bytes, or credentials of any kind — only schema DDL.
 
 ## 9. Migration Commands
 
@@ -487,6 +519,19 @@ DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentca
   because the entire point is proving behavior across two SEPARATE,
   concurrently-open transactions, which a single shared connection
   cannot represent.
+- **`PatientDocument` model/repository/service/API tests, plus storage
+  and file-validation tests (STORY-008)**
+  (`backend/tests/models/test_patient_document.py`,
+  `backend/tests/repositories/test_patient_document.py`,
+  `backend/tests/services/test_document.py`,
+  `backend/tests/api/test_document_endpoints.py`) run against real
+  PostgreSQL under the same savepoint isolation, PLUS a
+  temporary-directory-backed `LocalDocumentStorage` (`local_storage`/
+  `client_with_storage` fixtures, `tests/conftest.py`) — never the real
+  configured `DOCUMENT_STORAGE_PATH`. `backend/tests/storage/` and
+  `backend/tests/services/test_document_validation.py` need no database
+  at all (pure filesystem-in-a-temp-dir and pure-function tests
+  respectively) and run unconditionally.
 - All prior stories' tests continue to pass unmodified by later stories,
   aside from two pre-existing tests (STORY-004) whose environment
   fixtures needed a synthetic `JWT_SECRET_KEY` added once the new
