@@ -1,17 +1,19 @@
 # AgentCare Identity, Authentication & Authorization (RBAC)
 
 This document describes the identity, authentication, and authorization
-foundation implemented in STORY-004, and how STORY-005 puts it to work
-against a real domain resource for the first time (`Patient` — see
-[PATIENTS.md](PATIENTS.md) for the full patient-domain model). It follows
+foundation implemented in STORY-004, and how STORY-005/006 put it to
+work against real domain resources (`Patient` — see
+[PATIENTS.md](PATIENTS.md); `Department`/`Practitioner`/availability —
+see [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)). It follows
 the same CURRENT vs. PLANNED discipline as [ARCHITECTURE.md](ARCHITECTURE.md):
 everything described here as implemented exists in the repository today;
 anything marked PLANNED does not yet.
 
 This is security-critical infrastructure — see
-[adr/ADR-0004-identity-and-authorization.md](adr/ADR-0004-identity-and-authorization.md)
+[adr/ADR-0004-identity-and-authorization.md](adr/ADR-0004-identity-and-authorization.md),
+[adr/ADR-0005-patient-identity-and-access.md](adr/ADR-0005-patient-identity-and-access.md),
 and
-[adr/ADR-0005-patient-identity-and-access.md](adr/ADR-0005-patient-identity-and-access.md)
+[adr/ADR-0006-scheduling-resources.md](adr/ADR-0006-scheduling-resources.md)
 for the decision records.
 
 ## 1. Identity Model: User vs. OrganizationMembership
@@ -123,10 +125,12 @@ this order:
 
 1. **Authenticated user** — `get_current_user` (Bearer token → `User`).
 2. **Target organization** — an `organization_id`, which
-   `get_current_membership` accepts as a plain parameter. Once a real
-   organization-scoped route exists, FastAPI binds this automatically
-   from that route's `{organization_id}` path parameter (sub-dependencies
-   inherit path parameters by name) — no route does this yet (Section 8).
+   `get_current_membership` accepts as a plain parameter. FastAPI binds
+   this automatically from a route's `{organization_id}` path parameter
+   (sub-dependencies inherit path parameters by name) — every
+   organization-scoped route added so far (`patients.py`,
+   `departments.py`, `practitioners.py`) relies on exactly this
+   mechanism (Section 8).
 3. **Active membership** — `get_current_membership` queries the database
    for `(organization_id, user_id)` and requires `is_active=True`.
 4. **Persisted role** — read directly off the resolved
@@ -157,9 +161,11 @@ independently inside individual route functions — a route declares its
 required role(s) once, in its dependency list, and the same, tested logic
 enforces it everywhere.
 
-**Wired into a real route as of STORY-005**:
-`app/api/v1/endpoints/patients.py` — see Section 8 and
-[PATIENTS.md](PATIENTS.md) Section 8 for the full authorization matrix.
+**Wired into real routes as of STORY-005/006**:
+`app/api/v1/endpoints/patients.py`, `departments.py`, and
+`practitioners.py` — see Section 8 and [PATIENTS.md](PATIENTS.md)
+Section 8 / [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)
+Section 12 for the full authorization matrices.
 
 ## 7. 401 vs. 403
 
@@ -198,9 +204,11 @@ full user-management API:
 (`tests/auth/test_dependencies.py`) in STORY-004 by calling them
 directly, the same way `app.db.session.get_db_session` was built and
 tested in STORY-002 before any route consumed it — the patient API
-(STORY-005, `app/api/v1/endpoints/patients.py`) is the first
-organization-scoped route to actually depend on them. See
-[PATIENTS.md](PATIENTS.md) Section 8 for that authorization matrix.
+(STORY-005) was the first organization-scoped route to actually depend
+on them; the department/practitioner/availability APIs (STORY-006)
+followed the same pattern. See [PATIENTS.md](PATIENTS.md) Section 8 and
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 12 for those
+authorization matrices.
 
 **Not implemented** (explicitly out of scope for this story): public
 registration, password reset, email verification, refresh tokens, MFA,
@@ -273,12 +281,15 @@ story assumes it either.
 Argon2id password hashing; stateless JWT access tokens; `get_current_user`
 (401 on failure); `get_current_membership`/`require_roles`
 (403 on failure, DB-authoritative membership/role); `POST /auth/token`,
-`GET /auth/me`; `Patient` and patient self-access, wired into a real,
-RBAC-enforced route (STORY-005 — see [PATIENTS.md](PATIENTS.md)).
+`GET /auth/me`; `Patient` and patient self-access (STORY-005); `Department`,
+`Practitioner`, practitioner-department assignment, and recurring
+availability, all RBAC-enforced (STORY-006 — see
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)).
 
-**Explicitly not implemented** (belong to later stories): `Department`,
-`Doctor`, `Appointment`, `Document`, any workflow engine, agents, LLM
-integration, refresh tokens, password reset, email verification, MFA,
-OAuth/social login, public registration, an audit-event system, patient
-update/delete, finer-grained permissions beyond `Role` (Section 11), and
-any CRUD API for `Organization`/`Facility` themselves.
+**Explicitly not implemented** (belong to later stories): `Appointment`,
+appointment booking/rescheduling/cancellation, `Document`, any workflow
+engine, agents, LLM integration, refresh tokens, password reset, email
+verification, MFA, OAuth/social login, public registration, an
+audit-event system, patient update/delete, patient-readable scheduling
+discovery endpoints, finer-grained permissions beyond `Role` (Section 11),
+and any CRUD API for `Organization`/`Facility` themselves.

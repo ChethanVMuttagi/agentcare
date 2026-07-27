@@ -8,19 +8,29 @@ so this stays the one place that needs updating, instead of a growing
 list of import comments in `migrations/env.py` itself.
 """
 
+from app.models.department import Department
 from app.models.facility import Facility, FacilityType
 from app.models.membership import OrganizationMembership, Role
 from app.models.organization import Organization, OrganizationType
 from app.models.patient import Patient
+from app.models.practitioner import Practitioner, PractitionerType
+from app.models.practitioner_availability import DayOfWeek, PractitionerAvailability
+from app.models.practitioner_department import PractitionerDepartment
 from app.models.user import User
 
 __all__ = [
+    "DayOfWeek",
+    "Department",
     "Facility",
     "FacilityType",
     "Organization",
     "OrganizationMembership",
     "OrganizationType",
     "Patient",
+    "Practitioner",
+    "PractitionerAvailability",
+    "PractitionerDepartment",
+    "PractitionerType",
     "Role",
     "User",
 ]

@@ -1,7 +1,8 @@
 # AgentCare Architecture
 
-This document describes AgentCare's backend architecture as of STORY-005
-(Patient Domain, Self-Access & Tenant-Safe API), building on STORY-004
+This document describes AgentCare's backend architecture as of STORY-006
+(Department, Practitioner & Availability Foundation), building on
+STORY-005 (Patient Domain, Self-Access & Tenant-Safe API), STORY-004
 (Identity, Membership & RBAC Foundation), STORY-003 (Organization &
 Facility Tenancy Foundation), STORY-002 (PostgreSQL & Database
 Foundation), and STORY-001 (Architecture & Python Backend Foundation). It
@@ -11,8 +12,10 @@ clearly separates **CURRENT** (what exists in the repository today) from
 project as a whole, [DATABASE.md](DATABASE.md) for the full
 database-layer detail, [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the domain
 model itself, [RBAC.md](RBAC.md) for the full identity/authentication/
-authorization model, and [PATIENTS.md](PATIENTS.md) for the patient
-domain this story adds — this document only summarizes all four.
+authorization model, [PATIENTS.md](PATIENTS.md) for the patient domain,
+and [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) for the
+department/practitioner/availability domain this story adds — this
+document only summarizes all five.
 
 ## 1. Architectural Principles
 
@@ -31,7 +34,7 @@ domain this story adds — this document only summarizes all four.
   driven by typed settings, not scattered string comparisons or hardcoded
   values.
 
-## 2. Current Architecture (STORY-001 through STORY-005)
+## 2. Current Architecture (STORY-001 through STORY-006)
 
 The backend is a single Python package (`backend/app/`) — a **modular
 monolith**:
@@ -43,9 +46,11 @@ backend/app/
 ├── api/v1/
 │   ├── router.py         # Aggregates versioned API routes
 │   └── endpoints/
-│       ├── auth.py       # POST /auth/token, GET /auth/me
-│       ├── health.py     # GET /api/v1/health, GET /api/v1/ready
-│       └── patients.py   # POST/GET .../patients, .../patients/{id}, .../patients/me
+│       ├── auth.py           # POST /auth/token, GET /auth/me
+│       ├── health.py         # GET /api/v1/health, GET /api/v1/ready
+│       ├── patients.py       # POST/GET .../patients, .../patients/{id}, .../patients/me
+│       ├── departments.py    # POST/GET .../departments, .../departments/{id}
+│       └── practitioners.py  # POST/GET .../practitioners(/{id}), assignment, availability
 ├── auth/
 │   ├── security.py       # hash_password / verify_password (Argon2id)
 │   ├── jwt.py             # create_access_token / decode_access_token (PyJWT)
@@ -63,19 +68,34 @@ backend/app/
 │   ├── mixins.py          # UUIDPrimaryKeyMixin, TimestampMixin
 │   └── types.py           # enum_values() — shared Enum column helper
 ├── models/
-│   ├── organization.py    # Organization, OrganizationType
-│   ├── facility.py        # Facility, FacilityType
-│   ├── user.py             # User, normalize_email()
-│   ├── membership.py       # OrganizationMembership, Role
-│   └── patient.py          # Patient, normalize_person_name()
+│   ├── organization.py              # Organization, OrganizationType
+│   ├── facility.py                  # Facility, FacilityType
+│   ├── user.py                       # User, normalize_email()
+│   ├── membership.py                 # OrganizationMembership, Role
+│   ├── patient.py                    # Patient, normalize_person_name()
+│   ├── department.py                 # Department
+│   ├── practitioner.py               # Practitioner, PractitionerType
+│   ├── practitioner_department.py    # PractitionerDepartment (assignment)
+│   └── practitioner_availability.py  # PractitionerAvailability, DayOfWeek
 ├── repositories/
-│   └── patient.py         # Tenant-scoped persistence/query only — see PATIENTS.md
+│   ├── patient.py               # Tenant-scoped persistence/query only — see PATIENTS.md
+│   ├── facility.py              # Minimal: Department's ownership pre-check only
+│   ├── department.py
+│   ├── practitioner.py
+│   ├── practitioner_department.py
+│   └── availability.py
 ├── services/
-│   └── patient.py         # PatientService — business rules + transaction ownership
+│   ├── patient.py               # PatientService — business rules + transaction ownership
+│   ├── department.py            # DepartmentService
+│   ├── practitioner.py          # PractitionerService (incl. department assignment)
+│   └── availability.py          # AvailabilityService (assignment/time/timezone/overlap rules)
 └── schemas/
     ├── common.py          # ErrorResponse, HealthResponse, ReadinessResponse
     ├── auth.py             # TokenRequest, TokenResponse, CurrentUserResponse
-    └── patient.py           # PatientCreate, PatientResponse, PatientListResponse
+    ├── patient.py           # PatientCreate, PatientResponse, PatientListResponse
+    ├── department.py        # DepartmentCreate, DepartmentResponse, DepartmentListResponse
+    ├── practitioner.py      # PractitionerCreate/Response/ListResponse, assignment response
+    └── availability.py      # AvailabilityCreate, AvailabilityResponse, AvailabilityListResponse
 ```
 
 Plus, under `backend/` alongside `app/`: `alembic.ini` and `migrations/`
@@ -138,24 +158,44 @@ What exists today:
   pattern (`Route -> Service -> Repository -> Session`, with the service
   owning commit/no-commit — Section 4). See [PATIENTS.md](PATIENTS.md)
   for the full model and ADR-0005 for the decision record.
+- **The administrative scheduling-resource foundation**
+  (`app/models/department.py`, `practitioner.py`,
+  `practitioner_department.py`, `practitioner_availability.py`; their
+  repositories and services; `app/api/v1/endpoints/departments.py`,
+  `practitioners.py` — STORY-006): `Department` (belongs to a `Facility`,
+  which must share its `Organization`), `Practitioner` (a schedulable
+  healthcare professional, deliberately not named `Doctor`),
+  `PractitionerDepartment` (many-to-many assignment), and
+  `PractitionerAvailability` (recurring weekly windows, not materialized
+  appointment slots). Tenant/facility/assignment ownership is enforced at
+  the DATABASE level via composite foreign keys (not just application
+  validation) — see [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md)
+  and ADR-0006. This story does not implement appointments.
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data — this
   now explicitly includes never logging `JWT_SECRET_KEY`, issued tokens,
-  plaintext passwords, or `PatientCreate` payloads (see
+  plaintext passwords, `PatientCreate` payloads, or practitioner/patient
+  names beyond what's operationally necessary (see
   [SECURITY.md](../SECURITY.md)).
 - A standardized error response shape and global exception handling that
   never leaks stack traces or internal detail to clients — this also
   covers database errors (never exposing connection strings or driver
   exception text via the API), authentication/authorization failures
   (never revealing whether an email or organization exists — see
-  [RBAC.md](RBAC.md) Section 7), and patient lookups (never revealing
+  [RBAC.md](RBAC.md) Section 7), patient lookups (never revealing
   that a patient UUID exists under a different organization — see
-  [PATIENTS.md](PATIENTS.md) Section 10).
+  [PATIENTS.md](PATIENTS.md) Section 10), and department/practitioner
+  lookups (same non-disclosure principle — see
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 15).
 
 What does **not** exist yet: a repository or service layer for
 `Organization`/`Facility` themselves; any entity beyond `Organization`/
-`Facility`/`User`/`OrganizationMembership`/`Patient`; any CRUD API for
-`Organization`/`Facility`; patient update/delete; any LLM call; any
+`Facility`/`User`/`OrganizationMembership`/`Patient`/`Department`/
+`Practitioner`/`PractitionerDepartment`/`PractitionerAvailability`; any
+CRUD API for `Organization`/`Facility`; patient update/delete;
+`Appointment` or any booking/rescheduling/cancellation flow; a
+race-proof (database exclusion constraint) availability-overlap check;
+patient-readable scheduling discovery endpoints; any LLM call; any
 agent; any frontend; public user registration; password reset; email
 verification; refresh tokens; or MFA.
 
@@ -164,16 +204,30 @@ verification; refresh tokens; or MFA.
 Everything in this section is direction, not current behavior.
 
 - **A service/repository layer for `Organization`/`Facility` themselves**
-  — STORY-005 established the `Route -> Service -> Repository -> Session`
-  pattern for `Patient`, but `Organization`/`Facility` still have no
-  service, repository, or CRUD API of their own; STORY-003 established
+  — STORY-005/006 established the `Route -> Service -> Repository ->
+  Session` pattern for `Patient` and the scheduling resources, but
+  `Organization`/`Facility` still have no service or CRUD API of their
+  own (only the minimal `app/repositories/facility.py` read used by
+  `DepartmentService`'s ownership check); STORY-003 established
   persistence only.
+- **`Appointment` and appointment-slot materialization** — `Department`,
+  `Practitioner`, `PractitionerDepartment`, and
+  `PractitionerAvailability` (STORY-006) are the foundation a future
+  booking story will consume; booking, rescheduling, cancellation, and
+  waitlists don't exist yet — see
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 16.
+- **Race-proof availability-overlap prevention** (a PostgreSQL exclusion
+  constraint) — the current check is a documented, non-race-proof
+  service-level pre-check — see
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 9.
+- **Patient-readable scheduling discovery** (departments/practitioners/
+  availability search) — deliberately deferred until a concrete
+  booking-flow need defines the safe projection — see
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 12.
 - **Further healthcare domain models** below the tenant hierarchy
-  (appointments, referrals, staff, documents, etc.), as SQLAlchemy 2.x
-  `Mapped[...]` classes subclassing `app.db.base.Base` — `Organization`/
-  `Facility` (STORY-003), `User`/`OrganizationMembership` (STORY-004),
-  and `Patient` (STORY-005) are the first, not the last; see
-  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 15.
+  (referrals, staff profiles, documents, etc.), as SQLAlchemy 2.x
+  `Mapped[...]` classes subclassing `app.db.base.Base` — see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 19.
 - **Patient update/delete** — only create, get-by-id, list, and
   self-access exist (STORY-005) — see [PATIENTS.md](PATIENTS.md)
   Section 13.
@@ -181,7 +235,11 @@ Everything in this section is direction, not current behavior.
   (`admin`/`staff`/`patient`), refresh tokens, and token
   revocation/session control — see [RBAC.md](RBAC.md) Sections 9 and 11.
 - **LangGraph-based agent workflows** for coordination tasks (scheduling,
-  intake, referrals, follow-ups), invoked through the service layer.
+  intake, referrals, follow-ups), invoked through the service layer. Any
+  future administrative-routing agent (e.g. matching "book my cardiology
+  follow-up" to a `Department`) must respect the
+  administrative-routing-is-not-diagnosis boundary — see
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 14.
 - **An LLM provider abstraction** so agents/workflows are not hardcoded to
   a single vendor (Groq / OpenAI / Anthropic).
 - **Docker** packaging for consistent local/dev/prod environments.
@@ -201,22 +259,30 @@ Route (API layer)
       → Database (PostgreSQL)
 ```
 
-**`Route → Service → Repository → Database` is CURRENT as of STORY-005**
-for the patient domain (`app/api/v1/endpoints/patients.py` →
-`app.services.patient.PatientService` → `app.repositories.patient` →
-`AsyncSession`) — the first real instance of this pattern, established
-for every future domain resource to follow. `Workflow`/`Agent`/`Tool`
-remain PLANNED (Section 3) — no agentic coordination exists yet.
+**`Route → Service → Repository → Database` is CURRENT as of STORY-005**,
+first proven for the patient domain (`app/api/v1/endpoints/patients.py`
+→ `app.services.patient.PatientService` → `app.repositories.patient` →
+`AsyncSession`), **and reused unchanged for the scheduling-resource
+domain in STORY-006** (`departments.py`/`practitioners.py` →
+`DepartmentService`/`PractitionerService`/`AvailabilityService` → their
+respective repositories) — now demonstrated across two independent
+domains, the pattern every future domain resource is expected to
+follow. `Workflow`/`Agent`/`Tool` remain PLANNED (Section 3) — no
+agentic coordination exists yet.
 
 Routes stay thin: they parse/validate input, call a service, and shape the
 response. Services hold business rules AND own the transaction boundary
-for mutating operations (`PatientService.create_patient` commits; the
-repository only ever adds/flushes — see [PATIENTS.md](PATIENTS.md)
-Section 6 and [DATABASE.md](DATABASE.md) "Transaction Ownership
-Philosophy"). Once workflows exist, services will also decide whether a
-task needs one at all. Workflows will orchestrate multi-step agent
-coordination. Agents will never bypass their tools to act directly on
-the system.
+for mutating operations (`PatientService.create_patient`,
+`DepartmentService.create_department`,
+`PractitionerService.create_practitioner`/`assign_to_department`,
+`AvailabilityService.create_availability` all commit only once every
+check passes; repositories only ever add/flush — see
+[PATIENTS.md](PATIENTS.md) Section 6,
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 10, and
+[DATABASE.md](DATABASE.md) "Transaction Ownership Philosophy"). Once
+workflows exist, services will also decide whether a task needs one at
+all. Workflows will orchestrate multi-step agent coordination. Agents
+will never bypass their tools to act directly on the system.
 
 ## 5. Why Agents Will Not Directly Access the Database
 
@@ -267,6 +333,17 @@ structural, not just a convention:
   and cross-tenant lookups return the same "not found" response as a
   truly nonexistent id — never disclosing that a patient exists under a
   different organization (see [PATIENTS.md](PATIENTS.md) Section 10).
+- `Department`/`Practitioner` (STORY-006) hold administrative scheduling
+  fields only — same discipline as `Patient`. Tenant/facility/assignment
+  ownership integrity is enforced at the DATABASE level via composite
+  foreign keys, not just application validation — a department can never
+  be created under a facility belonging to a different organization, and
+  a practitioner can never be assigned to a department in a different
+  organization, regardless of caller (see
+  [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Sections 4–5).
+  `PractitionerResponse` exposes no private email, phone, address, or
+  `User` linkage — none of those fields exist on the model in the first
+  place (Section 13 of that document).
 - The application must be able to start, and pass health checks, **without**
   any LLM API key or database connection configured. `DATABASE_URL` is
   optional at the configuration layer in every environment, and the real
@@ -346,7 +423,7 @@ tools will simply not expose clinical-decision capabilities.
 - Coverage added in STORY-003: the `Organization`/`Facility` domain model
   suite (`backend/tests/models/`) runs exclusively against real
   PostgreSQL (not SQLite), each test isolated by a rolled-back savepoint
-  — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 14 for what's covered
+  — see [DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 18 for what's covered
   and why SQLite isn't used here.
 - Coverage added in STORY-004: `User`/`OrganizationMembership` model
   tests, password hashing/verification, JWT creation/decoding
@@ -371,9 +448,23 @@ tools will simply not expose clinical-decision capabilities.
   returning 404, and that a patient response never contains anything
   beyond the documented administrative fields) — all against real
   PostgreSQL.
+- Coverage added in STORY-006: `Department`/`Practitioner`/
+  `PractitionerDepartment`/`PractitionerAvailability` model tests,
+  including the composite ownership-integrity foreign keys verified both
+  through the ORM and via raw SQL (facility-organization mismatch,
+  practitioner-organization mismatch, department-organization mismatch,
+  and the assignment-existence FK on availability); repository tests
+  (tenant-scoped reads, no hidden commits); service tests (facility
+  ownership, code-conflict, duplicate-assignment, unassigned-practitioner
+  rejection, invalid time range, invalid timezone, overlap rejection,
+  adjacent-window acceptance, cross-day/cross-inactive-window
+  acceptance); and the full department/practitioner/availability API
+  authorization matrices end-to-end (admin/staff/patient ×
+  create/list/get/assign/availability, cross-tenant rejection at every
+  level) — all against real PostgreSQL.
 - Test values (e.g. a JWT secret used only to test that `SecretStr` masking
-  works, or synthetic organization/facility/user/email/password/patient
-  values) are synthetic and clearly non-production.
+  works, or synthetic organization/facility/user/email/password/patient/
+  practitioner values) are synthetic and clearly non-production.
 - As services, repositories, and workflows are introduced, this section
   will describe how unit, integration, and end-to-end layers divide.
 
@@ -383,7 +474,7 @@ tools will simply not expose clinical-decision capabilities.
 boundary; `Facility` belongs to exactly one Organization via a required
 FK. Every future tenant-owned entity is expected to carry
 `organization_id`, directly or through an explicit ownership path. See
-[DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 9 and ADR-0003 for the full
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md) Section 13 and ADR-0003 for the full
 decision, including what is deliberately **not** yet enforced.
 
 **Extended (STORY-004, ADR-0004)**: identity (`User`) is deliberately
@@ -405,13 +496,33 @@ nonexistent id (Section 6, [PATIENTS.md](PATIENTS.md) Section 10),
 closing the "does this let a non-member learn a resource exists
 elsewhere" gap for this resource specifically.
 
+**Extended to a multi-level hierarchy (STORY-006, ADR-0006)**: `Department`
+belongs to `Facility` which belongs to `Organization`; `Practitioner`
+belongs to `Organization`; `PractitionerDepartment` and
+`PractitionerAvailability` each depend on two or three levels of that
+hierarchy simultaneously. Rather than trust application code to
+re-verify "does this facility really belong to this organization" at
+every call site, STORY-006 pushed that invariant into the DATABASE
+itself via composite foreign keys (`(organization_id, facility_id) ->
+facilities(organization_id, id)`, and two more analogous ones for
+practitioner/department assignment and a third for availability's
+assignment-existence check) — see
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Sections 4–5, 7 for
+the full mechanism. This is a stronger guarantee than STORY-005's
+single-level tenant check: it holds even against a hypothetical future
+code path that forgot to call `get_current_membership` at all, as long
+as it still goes through the ORM/database.
+
 **Still planned**: there is no global, automatic tenant-access filter at
 the query level, and none is assumed — each future domain resource's
 repository must independently require `organization_id` on every
-function, the way `app.repositories.patient` does, rather than relying on
-a shared interceptor. Row-level security and a
-schema-per-tenant/database-per-tenant alternative were both considered
-and deferred (not rejected) in ADR-0003.
+function, the way `app.repositories.patient`/`.department`/
+`.practitioner` do, rather than relying on a shared interceptor. Row-level
+security and a schema-per-tenant/database-per-tenant alternative were
+both considered and deferred (not rejected) in ADR-0003. A race-proof
+database exclusion constraint for availability-overlap prevention
+remains deferred — see
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 9.
 
 ## 11. Observability Direction (Planned)
 

@@ -103,6 +103,15 @@ statement that AgentCare is not a diagnosis or treatment system.
   organization-assigned patient number) are real PII once populated with
   a real person's data — the synthetic-data requirement below applies to
   them in full.
+- As of STORY-006, `Department` and `Practitioner` are also real,
+  persisted models (`app/models/department.py`,
+  `app/models/practitioner.py` — see
+  [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md)).
+  `Practitioner` is administrative scheduling data only: no diagnosis
+  capability, no treatment/prescription authority, and no unnecessary
+  personal information (no email, phone, address). A practitioner's
+  name is still real PII once populated with a real person's data — the
+  synthetic-data requirement applies to it in full, same as `Patient`.
 
 ## 8. Synthetic / Anonymized Test Data Requirement
 
@@ -126,6 +135,10 @@ statement that AgentCare is not a diagnosis or treatment system.
   date of birth, patient number) — `app/api/v1/endpoints/patients.py` and
   `app/services/patient.py` do not log request/response bodies today, and
   any future logging added to this path must continue to exclude them.
+- As of STORY-006, the same applies to `Department`/`Practitioner`
+  request/response contents (names in particular) —
+  `app/api/v1/endpoints/departments.py`, `practitioners.py`, and their
+  services do not log request/response bodies today.
 
 ## 10. Medical Document Handling Considerations
 

@@ -20,6 +20,7 @@ from app.db.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 from app.db.types import enum_values
 
 if TYPE_CHECKING:
+    from app.models.department import Department
     from app.models.organization import Organization
 
 
@@ -47,6 +48,14 @@ class Facility(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "facilities"
     __table_args__ = (
         UniqueConstraint("organization_id", "code", name="uq_facilities_organization_id_code"),
+        # Composite unique key (in addition to the plain PK on `id`) so
+        # `Department` can hold a composite FK `(organization_id,
+        # facility_id) -> facilities(organization_id, id)` — this is what
+        # makes "a Department's facility must belong to the SAME
+        # organization" a database-enforced invariant rather than an
+        # API-only check. See app/models/department.py and
+        # docs/SCHEDULING_RESOURCES.md.
+        UniqueConstraint("organization_id", "id", name="uq_facilities_organization_id_id"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -77,6 +86,21 @@ class Facility(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     organization: Mapped[Organization] = relationship(back_populates="facilities")
+
+    # Same no-delete-cascade rationale as every other relationship in this
+    # codebase (see app/models/organization.py) — the FK
+    # (`departments.facility_id`, part of a composite `ON DELETE RESTRICT`
+    # FK — see app/models/department.py) is the actual enforcement point.
+    # `overlaps="organization"`: this relationship and `Department.organization`
+    # both touch `departments.organization_id` — intentional and harmless,
+    # since that column is always set directly at construction time, never
+    # via relationship assignment (see app/models/department.py's
+    # `Department.facility` for the identical rationale in more detail).
+    departments: Mapped[list[Department]] = relationship(
+        back_populates="facility",
+        passive_deletes=True,
+        overlaps="organization",
+    )
 
     @validates("timezone")
     def _validate_timezone(self, _key: str, value: str) -> str:

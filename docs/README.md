@@ -6,14 +6,16 @@ documentation is not backfilled after the fact.
 
 ## Status
 
-As of STORY-005 (Patient Domain, Self-Access & Tenant-Safe API), this
-index, the [Architecture Decision Records](adr/README.md) process,
+As of STORY-006 (Department, Practitioner & Availability Foundation),
+this index, the [Architecture Decision Records](adr/README.md) process,
 [ARCHITECTURE.md](ARCHITECTURE.md), [DATABASE.md](DATABASE.md),
-[DOMAIN_MODEL.md](DOMAIN_MODEL.md), [RBAC.md](RBAC.md), and
-[PATIENTS.md](PATIENTS.md) exist. The remaining documents listed below
-are **reserved and intentionally not yet created**. Each will be added
-when the story that needs it is implemented, so that documentation never
-describes functionality that doesn't exist yet.
+[DOMAIN_MODEL.md](DOMAIN_MODEL.md), [RBAC.md](RBAC.md),
+[PATIENTS.md](PATIENTS.md), and
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) exist. The remaining
+documents listed below are **reserved and intentionally not yet
+created**. Each will be added when the story that needs it is
+implemented, so that documentation never describes functionality that
+doesn't exist yet.
 
 ## Planned Documents
 
@@ -36,9 +38,12 @@ describes functionality that doesn't exist yet.
 | `REQUIREMENTS_TRACEABILITY.md` | Mapping of stories/requirements to implementation and tests |
 
 `RBAC.md` (identity, authentication, and authorization model) was
-implemented in STORY-004, and `PATIENTS.md` (administrative patient
-domain, tenant ownership, self-access) in STORY-005 — see
-[RBAC.md](RBAC.md) and [PATIENTS.md](PATIENTS.md) directly rather than
+implemented in STORY-004, `PATIENTS.md` (administrative patient domain,
+tenant ownership, self-access) in STORY-005, and
+`SCHEDULING_RESOURCES.md` (department/practitioner/availability
+foundation) in STORY-006 — see [RBAC.md](RBAC.md),
+[PATIENTS.md](PATIENTS.md), and
+[SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) directly rather than
 the table above.
 
 ## Documentation Principles

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import date
+from datetime import date, time
 
 import pytest
 from fastapi import FastAPI
@@ -25,9 +25,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.auth.security import hash_password
 from app.db.session import get_db_session
 from app.main import create_app
+from app.models.department import Department
+from app.models.facility import Facility, FacilityType
 from app.models.membership import OrganizationMembership, Role
 from app.models.organization import Organization, OrganizationType
 from app.models.patient import Patient
+from app.models.practitioner import Practitioner, PractitionerType
+from app.models.practitioner_availability import DayOfWeek, PractitionerAvailability
+from app.models.practitioner_department import PractitionerDepartment
 from app.models.user import User
 
 
@@ -211,5 +216,160 @@ def make_patient(
         db_session.add(patient)
         await db_session.flush()
         return patient
+
+    return _make
+
+
+@pytest.fixture()
+def make_facility(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[Facility]]:
+    """Factory for a synthetic, flushed (never committed) Facility."""
+
+    async def _make(
+        organization: Organization,
+        code_suffix: str,
+        facility_type: FacilityType = FacilityType.HOSPITAL,
+        timezone: str = "UTC",
+    ) -> Facility:
+        facility = Facility(
+            organization_id=organization.id,
+            name=f"Synthetic Test Facility {code_suffix}",
+            code=f"FAC-{code_suffix}",
+            facility_type=facility_type,
+            timezone=timezone,
+        )
+        db_session.add(facility)
+        await db_session.flush()
+        return facility
+
+    return _make
+
+
+@pytest.fixture()
+def make_department(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[Department]]:
+    """Factory for a synthetic, flushed (never committed) Department.
+
+    Does NOT validate facility/organization ownership itself (that is
+    `app.services.department`'s job) — this is a raw factory for
+    model-level and repository-level tests that need to set up rows
+    directly, so it can also be used to construct deliberately-invalid
+    rows (e.g. a mismatched `organization`/`facility` pair) for
+    constraint tests.
+    """
+
+    async def _make(
+        organization: Organization,
+        facility: Facility,
+        code: str,
+        *,
+        name: str | None = None,
+        is_active: bool = True,
+    ) -> Department:
+        department = Department(
+            organization_id=organization.id,
+            facility_id=facility.id,
+            name=name or f"Synthetic Test Department {code}",
+            code=code,
+            is_active=is_active,
+        )
+        db_session.add(department)
+        await db_session.flush()
+        return department
+
+    return _make
+
+
+@pytest.fixture()
+def make_practitioner(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[Practitioner]]:
+    """Factory for a synthetic, flushed (never committed) Practitioner."""
+
+    async def _make(
+        organization: Organization,
+        *,
+        first_name: str = "Synthetic",
+        last_name: str = "Practitioner",
+        practitioner_type: PractitionerType = PractitionerType.PHYSICIAN,
+        is_active: bool = True,
+    ) -> Practitioner:
+        practitioner = Practitioner(
+            organization_id=organization.id,
+            first_name=first_name,
+            last_name=last_name,
+            practitioner_type=practitioner_type,
+            is_active=is_active,
+        )
+        db_session.add(practitioner)
+        await db_session.flush()
+        return practitioner
+
+    return _make
+
+
+@pytest.fixture()
+def make_practitioner_department(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[PractitionerDepartment]]:
+    """Factory for a synthetic, flushed (never committed)
+    `PractitionerDepartment` assignment. Does NOT validate tenant
+    ownership itself — see `app.services.practitioner`."""
+
+    async def _make(
+        organization: Organization,
+        practitioner: Practitioner,
+        department: Department,
+        *,
+        is_active: bool = True,
+    ) -> PractitionerDepartment:
+        assignment = PractitionerDepartment(
+            organization_id=organization.id,
+            practitioner_id=practitioner.id,
+            department_id=department.id,
+            is_active=is_active,
+        )
+        db_session.add(assignment)
+        await db_session.flush()
+        return assignment
+
+    return _make
+
+
+@pytest.fixture()
+def make_availability(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[PractitionerAvailability]]:
+    """Factory for a synthetic, flushed (never committed)
+    `PractitionerAvailability` window. Does NOT validate assignment,
+    time-range, timezone, or overlap rules itself — see
+    `app.services.availability`."""
+
+    async def _make(
+        organization: Organization,
+        practitioner: Practitioner,
+        department: Department,
+        *,
+        day_of_week: DayOfWeek = DayOfWeek.MONDAY,
+        start_time: time = time(9, 0),
+        end_time: time = time(12, 0),
+        timezone: str = "UTC",
+        is_active: bool = True,
+    ) -> PractitionerAvailability:
+        availability = PractitionerAvailability(
+            organization_id=organization.id,
+            practitioner_id=practitioner.id,
+            department_id=department.id,
+            day_of_week=day_of_week,
+            start_time=start_time,
+            end_time=end_time,
+            timezone=timezone,
+            is_active=is_active,
+        )
+        db_session.add(availability)
+        await db_session.flush()
+        return availability
 
     return _make

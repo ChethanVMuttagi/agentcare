@@ -39,7 +39,8 @@ or agent workflows exist.
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   [docs/DATABASE.md](docs/DATABASE.md),
   [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md),
-  [docs/RBAC.md](docs/RBAC.md), [docs/PATIENTS.md](docs/PATIENTS.md), and
+  [docs/RBAC.md](docs/RBAC.md), [docs/PATIENTS.md](docs/PATIENTS.md),
+  [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md), and
   the Architecture Decision Record process ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
 - **FastAPI backend application foundation** (`backend/app/`): an
@@ -90,17 +91,37 @@ or agent workflows exist.
   response as a nonexistent id. Backed by AgentCare's third Alembic
   migration, applied to and validated against real PostgreSQL. See
   [docs/PATIENTS.md](docs/PATIENTS.md).
+- **Department, practitioner & availability foundation**
+  (`backend/app/models/department.py`, `practitioner.py`,
+  `practitioner_department.py`, `practitioner_availability.py`; their
+  repositories/services; `backend/app/api/v1/endpoints/departments.py`,
+  `practitioners.py`): `Department` (belongs to a `Facility`, which MUST
+  share its `Organization` — enforced at the DATABASE level via a
+  composite foreign key, not just application validation),
+  `Practitioner` (a schedulable healthcare professional — deliberately
+  not named `Doctor`), a many-to-many practitioner-department assignment,
+  and recurring weekly availability windows (not materialized
+  appointment slots). Tenant/facility/assignment ownership integrity is
+  database-enforced throughout. `ADMIN` may create departments/
+  practitioners/assignments; `ADMIN`/`STAFF` may list/get and manage
+  availability; `PATIENT` may not reach any of it in this story. Backed
+  by AgentCare's fourth Alembic migration, applied to and validated
+  against real PostgreSQL. This story does not implement appointments.
+  See [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md).
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app,
   real (SQLite-backed, for isolation) infrastructure-level database
-  behavior, the `Organization`/`Facility`/`User`/`OrganizationMembership`/
-  `Patient` models, password hashing, JWT handling, the auth API, and the
-  full patient repository/service/API layers end-to-end against real
-  PostgreSQL
+  behavior, all nine domain models, password hashing, JWT handling, the
+  auth API, and the full patient/department/practitioner/availability
+  repository/service/API layers end-to-end against real PostgreSQL
 
 **Not yet implemented** (planned, across future stories):
 - A CRUD API, service, and repository layer for `Organization`/`Facility`
-- Further domain models below the tenant hierarchy (appointments,
-  referrals, staff, documents, etc.)
+- `Appointment`, appointment-slot materialization, booking/rescheduling/
+  cancellation, waitlists
+- Race-proof (database exclusion constraint) availability-overlap
+  prevention; patient-readable scheduling discovery endpoints
+- Further domain models below the tenant hierarchy (referrals, staff
+  profiles, documents, etc.)
 - Patient update/delete; finer-grained permissions beyond `Role`; refresh
   tokens; token revocation; password reset; email verification; MFA;
   OAuth/social login; public user registration
@@ -149,24 +170,25 @@ recommendation, or any function that constitutes the practice of medicine.
 |---|---|---|
 | Backend API | Python, FastAPI | Implemented |
 | Configuration | Pydantic Settings | Implemented |
-| Database | PostgreSQL | Implemented (5 tables — see below) |
-| ORM | SQLAlchemy 2.x | Implemented (`Organization`, `Facility`, `User`, `OrganizationMembership`, `Patient`) |
-| Migrations | Alembic | Implemented (3 migrations, validated against real PostgreSQL) |
+| Database | PostgreSQL | Implemented (9 tables — see below) |
+| ORM | SQLAlchemy 2.x | Implemented (9 models, incl. composite-FK ownership integrity) |
+| Migrations | Alembic | Implemented (4 migrations, validated against real PostgreSQL) |
 | Authentication | Argon2id password hashing + JWT (PyJWT) | Implemented (`POST /auth/token`, `GET /auth/me`) |
-| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient API |
-| Repository/Service layers | `app/repositories/`, `app/services/` | Implemented for `Patient`; not yet for `Organization`/`Facility` |
+| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient + scheduling-resource APIs |
+| Repository/Service layers | `app/repositories/`, `app/services/` | Implemented for `Patient` and scheduling resources; not yet for `Organization`/`Facility` |
 | Agent Orchestration | LangGraph | Planned |
 | LLM Access | Provider-abstracted (Groq / OpenAI / Anthropic) | Planned |
 | Frontend | Next.js | Planned |
 | Containerization | Docker | Planned |
 
 The database layer is implemented and tested, but scoped narrowly:
-`organizations`, `facilities`, `users`, `organization_memberships`, and
-`patients` are the only tables that exist, there is no CRUD API for
-`Organization`/`Facility`, and no further healthcare domain model
-(appointments, etc.) exists yet — see
-[docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md), [docs/RBAC.md](docs/RBAC.md),
-and [docs/PATIENTS.md](docs/PATIENTS.md).
+`organizations`, `facilities`, `users`, `organization_memberships`,
+`patients`, `departments`, `practitioners`, `practitioner_departments`,
+and `practitioner_availability` are the only tables that exist, there is
+no CRUD API for `Organization`/`Facility`, and no appointment/booking
+concept exists yet — see [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md),
+[docs/RBAC.md](docs/RBAC.md), [docs/PATIENTS.md](docs/PATIENTS.md), and
+[docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md).
 
 ## Repository Structure
 
@@ -175,15 +197,20 @@ agentcare/
 ├── backend/             # FastAPI application foundation
 │   ├── app/
 │   │   ├── main.py       # Application factory (+ lifespan): create_app()
-│   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready/auth/patients)
+│   │   ├── api/v1/       # Versioned API routing + endpoints (health/ready/auth/
+│   │   │                 # patients/departments/practitioners)
 │   │   ├── auth/          # Password hashing, JWT, auth service, auth dependencies
 │   │   ├── core/         # Settings, logging, exceptions
 │   │   ├── db/            # Async SQLAlchemy engine/session, DB health check
-│   │   ├── models/         # Organization, Facility, User, OrganizationMembership, Patient
-│   │   ├── repositories/   # Patient (tenant-scoped persistence/query only)
-│   │   ├── services/       # PatientService (business rules + transaction ownership)
-│   │   └── schemas/      # Shared Pydantic schemas (errors, health, auth, patient)
-│   ├── migrations/        # Alembic migrations (organizations+facilities; users+memberships; patients)
+│   │   ├── models/         # Organization, Facility, User, OrganizationMembership,
+│   │   │                   # Patient, Department, Practitioner, PractitionerDepartment,
+│   │   │                   # PractitionerAvailability
+│   │   ├── repositories/   # Tenant-scoped persistence/query only, per resource
+│   │   ├── services/       # Business rules + transaction ownership, per resource
+│   │   └── schemas/      # Shared Pydantic schemas (errors, health, auth, patient,
+│   │                     # department, practitioner, availability)
+│   ├── migrations/        # Alembic migrations (org+facility; users+memberships;
+│   │                       # patients; department+practitioner+availability)
 │   ├── alembic.ini
 │   ├── tests/            # Backend test suite
 │   └── pyproject.toml    # Backend dependencies + tool configuration
@@ -194,6 +221,7 @@ agentcare/
 │   ├── DOMAIN_MODEL.md    # Domain model, tenant hierarchy, identity
 │   ├── RBAC.md            # Identity, authentication, authorization model
 │   ├── PATIENTS.md        # Administrative patient domain, tenant ownership, self-access
+│   ├── SCHEDULING_RESOURCES.md  # Department/Practitioner/availability domain
 │   └── adr/              # Architecture Decision Records
 ├── infrastructure/      # Deployment/infra config (not yet implemented)
 ├── scripts/             # Developer/operational scripts (not yet implemented)
@@ -254,12 +282,15 @@ alembic current                   # show current DB revision
 (AgentCare's tenant hierarchy), the `users`/`organization_memberships`
 tables (identity and role-based membership — see
 [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) and
-[docs/RBAC.md](docs/RBAC.md)), and the `patients` table (administrative
-patient records — see [docs/PATIENTS.md](docs/PATIENTS.md)). See
+[docs/RBAC.md](docs/RBAC.md)), the `patients` table (administrative
+patient records — see [docs/PATIENTS.md](docs/PATIENTS.md)), and the
+`departments`/`practitioners`/`practitioner_departments`/
+`practitioner_availability` tables (administrative scheduling resources
+— see [docs/SCHEDULING_RESOURCES.md](docs/SCHEDULING_RESOURCES.md)). See
 [docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow and
 testing strategy (SQLite is used only for isolated infrastructure-level
-tests; PostgreSQL remains the production database and is what the domain
-model, auth, and patient test suites run against).
+tests; PostgreSQL remains the production database and is what every
+domain model, repository, service, and API test suite runs against).
 
 Run the test suite and quality checks from `backend/`:
 

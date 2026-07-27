@@ -18,9 +18,11 @@ from app.db.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 from app.db.types import enum_values
 
 if TYPE_CHECKING:
+    from app.models.department import Department
     from app.models.facility import Facility
     from app.models.membership import OrganizationMembership
     from app.models.patient import Patient
+    from app.models.practitioner import Practitioner
 
 
 class OrganizationType(StrEnum):
@@ -104,6 +106,27 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # ON DELETE RESTRICT — see app/models/patient.py) is the actual
     # enforcement point.
     patients: Mapped[list[Patient]] = relationship(
+        back_populates="organization",
+        passive_deletes=True,
+    )
+
+    # Same no-delete-cascade rationale as `facilities`/`memberships`/
+    # `patients` above. The FK (`departments.organization_id`, part of a
+    # composite `ON DELETE RESTRICT` FK — see app/models/department.py) is
+    # the actual enforcement point. `overlaps="departments,facility"`:
+    # `departments.organization_id` is also written via
+    # `Facility.departments`/`Department.facility` — intentional and
+    # harmless (see `Facility.departments` for the detailed rationale).
+    departments: Mapped[list[Department]] = relationship(
+        back_populates="organization",
+        passive_deletes=True,
+        overlaps="departments,facility",
+    )
+
+    # Same no-delete-cascade rationale as above. The FK
+    # (`practitioners.organization_id`, ON DELETE RESTRICT — see
+    # app/models/practitioner.py) is the actual enforcement point.
+    practitioners: Mapped[list[Practitioner]] = relationship(
         back_populates="organization",
         passive_deletes=True,
     )
