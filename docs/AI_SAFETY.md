@@ -59,10 +59,11 @@ runs) and by the mandatory end-to-end test
 
 ## 3. Provider Abstraction
 
-`app.ai.providers.base.LLMProvider` is a `Protocol` with one method,
-`generate_structured(request) -> AdministrativeDecision`. Nothing
-outside `app.ai.providers` imports a vendor SDK. Two implementations
-exist:
+`app.ai.providers.base.LLMProvider` is a `Protocol` with two methods:
+`generate_structured(request) -> AdministrativeDecision` (STORY-010,
+unchanged) and `generate_coordinator_decision(request) -> CoordinatorDecision`
+(STORY-011, additive — see [AGENTS.md](AGENTS.md)). Nothing outside
+`app.ai.providers` imports a vendor SDK. Two implementations exist:
 
 - **`AnthropicProvider`** (`app/ai/providers/anthropic_provider.py`) —
   the one real provider, backed by the official `anthropic` Python
@@ -267,22 +268,30 @@ instructed.
 
 Every `POST .../agent/execute` call creates and owns exactly one
 `WorkflowRun` (`app.ai.orchestration.AgentOrchestrationService`, built
-on STORY-009's `WorkflowService` — see [WORKFLOWS.md](WORKFLOWS.md)):
-`workflow_created` -> `workflow_started` -> `step_started` -> (`tool_invoked`,
-only if a tool was called) -> `step_completed`/`step_failed` ->
-`workflow_completed`/`workflow_failed`. `TOOL_INVOKED` is the one new
-`WorkflowEventType` value this story adds (migration `5354c755424b`,
-which also adds `WorkflowEvent.sequence` — a database-assigned,
-strictly monotonic ordering column fixing a genuine flaky-ordering bug
-this story's own multi-event-per-request audit trail surfaced; see
-[WORKFLOWS.md](WORKFLOWS.md) Section 5 for the full detail on both
-changes).
+on STORY-009's `WorkflowService` — see [WORKFLOWS.md](WORKFLOWS.md)).
+As of STORY-011 (see [AGENTS.md](AGENTS.md) Section 6 for the full
+event-chain diagram), a successful handoff produces: `workflow_created`
+-> `workflow_started` -> `step_started` (coordination) -> `agent_handoff`
+-> `step_completed` (coordination) -> `step_started` (specialist
+execution) -> `tool_invoked` (only if a tool was called) ->
+`step_completed`/`step_failed` (specialist execution) ->
+`workflow_completed`/`workflow_failed`. A request the Coordinator
+refuses or asks for clarification on never leaves the coordination step
+— no `agent_handoff` event, no second step. `TOOL_INVOKED` (STORY-010)
+and `AGENT_HANDOFF` (STORY-011, migration `b5456329cbdd`) are the only
+two `WorkflowEventType` values added since STORY-009; STORY-010's
+migration `5354c755424b` additionally added `WorkflowEvent.sequence` —
+a database-assigned, strictly monotonic ordering column fixing a
+genuine flaky-ordering bug that story's multi-event audit trail
+surfaced; see [WORKFLOWS.md](WORKFLOWS.md) Section 5 for full detail.
 
 **Persist**: workflow/step state, the tool's own safe name, safe
 action/result codes (e.g. `"appointment_booked"`, `"appointment_conflict"`,
-`"unknown_tool"`), bounded `safe_metadata` (currently only
-`{"tool_name": "..."}` and `{"decision_kind": "...", ...}` — never
-arguments or results), actor identifiers, timestamps, and bounded
+`"unknown_tool"`, `"forbidden_tool"`), bounded `safe_metadata`
+(`{"tool_name": "..."}`, `{"decision_kind": "...", ...}`, and — new in
+STORY-011 — `{"from_agent": "...", "to_agent": "..."}` for a handoff —
+never arguments, results, or a Coordinator's reasoning for its choice),
+actor identifiers, timestamps, and bounded
 `failure_code`/`failure_message_safe` (STORY-009's existing fields —
 never a raw exception).
 
@@ -336,7 +345,7 @@ never after.
 
 ## 12. Current vs. Planned
 
-**Current (this story)**: `LLMProvider` abstraction, `AnthropicProvider`
+**Current (STORY-010)**: `LLMProvider` abstraction, `AnthropicProvider`
 (real, via the official SDK), `FakeLLMProvider` (deterministic test
 double); `AdministrativeDecision` structured decision contract;
 `SafetyPolicy` deterministic pre/post screening; `ToolDefinition`/
@@ -349,12 +358,29 @@ RBAC/patient-self-scope model as every other route in this codebase;
 comprehensive tests including a mandatory real-PostgreSQL end-to-end
 proof and a full adversarial/security suite.
 
-**Explicitly NOT implemented in this story** (later stories): the final
-multi-agent architecture, agent-to-agent delegation, a LangGraph graph,
-autonomous multi-step planning loops, background workers, reminders, a
-frontend, reschedule/cancel tools (see [TOOLS.md](TOOLS.md) "Initial
-Tools" for why this is a deliberate depth-over-breadth choice, not an
-oversight), a fuller idempotent-retry framework, real natural-language
-clinical-content classification (beyond `SafetyPolicy`'s deliberately
-simple pattern matching — Section 7's "Known Limitation"), and any form
-of diagnosis, treatment, prescription, or dosage advice.
+**Added in STORY-011** (see [AGENTS.md](AGENTS.md) and
+[ADR-0011](adr/ADR-0011-multi-agent-coordination.md) for full detail):
+genuine multi-agent coordination — a Coordinator agent
+(`CoordinatorDecision`, with no `tool_call` variant at all — this
+document's "the LLM is untrusted" boundary and Section 6's "no
+chain-of-thought" guarantee both apply to it identically) that hands off
+to at most one of three specialists (Scheduling, Document, Routing),
+each with its own system prompt and a SEPARATE, application-code-enforced
+tool allowlist. `LLMProvider` gained one new method,
+`generate_coordinator_decision`, alongside the unchanged
+`generate_structured`. Two new tools (`list_patient_documents`,
+`resolve_department`). One new event type, `agent_handoff`. This is
+still "one Coordinator decision, at most one handoff, at most one
+specialist decision, at most one tool execution" — the execution-limit
+philosophy in this document is extended by one hop, not relaxed.
+
+**Explicitly NOT implemented as of STORY-011** (later stories):
+unrestricted multi-step planning, recursive or specialist-to-specialist
+delegation, a LangGraph graph, autonomous loops, background workers,
+reminders, a frontend, reschedule/cancel tools (see [TOOLS.md](TOOLS.md)
+"Initial Tools" for why this is a deliberate depth-over-breadth choice,
+not an oversight), a fuller idempotent-retry framework, real
+natural-language clinical-content classification (beyond
+`SafetyPolicy`'s deliberately simple pattern matching — Section 7's
+"Known Limitation"), and any form of diagnosis, treatment, prescription,
+or dosage advice.

@@ -32,6 +32,8 @@ class ToolCategory(StrEnum):
 
     APPOINTMENT_AVAILABILITY = "appointment_availability"
     APPOINTMENT_BOOKING = "appointment_booking"
+    DOCUMENT_STATUS = "document_status"
+    ADMINISTRATIVE_ROUTING = "administrative_routing"
 
 
 class ToolResultStatus(StrEnum):

@@ -138,12 +138,21 @@ class WorkflowEventType(StrEnum):
     safe tool name in `safe_metadata` (see
     `app.services.workflow.WorkflowService.record_tool_invocation`) —
     never arguments, never a result payload.
+
+    `AGENT_HANDOFF` (STORY-011) is the multi-agent counterpart: recorded
+    when the Coordinator agent hands a request off to a specialist. It
+    carries only the safe `from_agent`/`to_agent` names in
+    `safe_metadata` (see
+    `app.services.workflow.WorkflowService.record_agent_handoff`) — never
+    the Coordinator's reasoning for the choice, and never any free-form
+    text.
     """
 
     WORKFLOW_CREATED = "workflow_created"
     WORKFLOW_STARTED = "workflow_started"
     STEP_STARTED = "step_started"
     TOOL_INVOKED = "tool_invoked"
+    AGENT_HANDOFF = "agent_handoff"
     STEP_COMPLETED = "step_completed"
     STEP_FAILED = "step_failed"
     STEP_SKIPPED = "step_skipped"

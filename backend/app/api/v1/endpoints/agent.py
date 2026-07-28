@@ -6,12 +6,14 @@ docs/RBAC.md): `ADMIN`/`STAFF` may execute a request for any patient (or
 none) in their organization. `PATIENT` may execute a request only for
 themselves — their identity is always server-derived, exactly like
 `app.api.v1.endpoints.workflows`, never trusted from the request body or
-anything the model itself might say.
+anything a model itself might say.
 
-This route creates and owns exactly one `WorkflowRun`: one model
-decision, at most one tool execution, fully persisted before the
-response is returned. See `app.ai.orchestration.AgentOrchestrationService`
-for the full call chain.
+This route creates and owns exactly one `WorkflowRun`: one Coordinator
+decision, at most one specialist handoff, at most one specialist model
+decision, at most one tool execution — fully persisted before the
+response is returned. See
+`app.ai.orchestration.AgentOrchestrationService` for the full call
+chain and docs/AGENTS.md for the multi-agent architecture (STORY-011).
 """
 
 from __future__ import annotations
@@ -22,11 +24,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.agents.definitions import get_agent_registry
+from app.ai.agents.registry import AgentRegistry
 from app.ai.orchestration import AgentOrchestrationService
 from app.ai.providers.base import LLMProvider
 from app.ai.providers.factory import get_llm_provider
-from app.ai.tools.appointment_tools import get_tool_registry
 from app.ai.tools.registry import ToolRegistry
+from app.ai.tools.registry_builder import get_full_tool_registry
 from app.auth.dependencies import get_current_user, require_roles
 from app.db.session import get_db_session
 from app.models.membership import OrganizationMembership, Role
@@ -69,9 +73,11 @@ async def execute_administrative_request(
     membership: Annotated[OrganizationMembership, Depends(_require_any_access)],
     current_user: Annotated[User, Depends(get_current_user)],
     provider: Annotated[LLMProvider, Depends(get_llm_provider)],
-    tool_registry: Annotated[ToolRegistry, Depends(get_tool_registry)],
+    tool_registry: Annotated[ToolRegistry, Depends(get_full_tool_registry)],
+    agent_registry: Annotated[AgentRegistry, Depends(get_agent_registry)],
 ) -> AgentExecuteResponse:
-    """Interpret one administrative request and, at most, execute one
+    """Interpret one administrative request via the Coordinator agent
+    and, at most, hand off to one specialist that executes at most one
     tool. ADMIN/STAFF may act for any patient in the organization (or
     none); PATIENT may act only for themselves. Always creates and
     persists a `WorkflowRun` — see the module docstring."""
@@ -83,7 +89,9 @@ async def execute_administrative_request(
         requested_patient_id=payload.patient_id,
     )
 
-    orchestration_service = AgentOrchestrationService(session, provider, tool_registry)
+    orchestration_service = AgentOrchestrationService(
+        session, provider, tool_registry, agent_registry
+    )
     result = await orchestration_service.execute_administrative_request(
         organization_id=organization_id,
         initiated_by_user_id=current_user.id,
@@ -97,6 +105,7 @@ async def execute_administrative_request(
         workflow_id=result.workflow_run_id,
         workflow_status=result.workflow_status,
         decision_kind=result.decision_kind,
+        handled_by_agent=result.handled_by_agent,
         message=result.safe_message,
         tool_name=result.tool_name,
         tool_result_code=result.tool_result_code,

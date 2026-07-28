@@ -117,13 +117,33 @@ is the last-resort backstop if a handler ever fails to uphold it.
 
 ## 6. Initial Tools
 
-Two tools, both calling the REAL existing service layer — never a
-fake/hardcoded success path (Section 7):
+Four tools, all calling the REAL existing service/repository layer —
+never a fake/hardcoded success path (Section 7). The first two
+(STORY-010) are usable only by the Scheduling agent; the latter two
+(STORY-011) are each usable only by one other specialist — see
+[AGENTS.md](AGENTS.md) Section 5 "Two-Layer Tool Enforcement" for how
+that per-agent restriction is enforced ON TOP OF this registry, which
+itself remains agent-agnostic:
 
 | Tool | Category | Calls | Arguments |
 |---|---|---|---|
 | `check_availability` | `appointment_availability` | `AvailabilityQueryService.list_available_times` | `practitioner_id`, `department_id`, `on_date`, `duration_minutes` |
 | `book_appointment` | `appointment_booking` | `AppointmentService.book_appointment` | `practitioner_id`, `department_id`, `start_at`, `duration_minutes`, `patient_id` (ADMIN/STAFF only — see Section 3) |
+| `list_patient_documents` (STORY-011) | `document_status` | `PatientDocumentService.list_documents_for_patient` | `patient_id` (ADMIN/STAFF only — see Section 3) |
+| `resolve_department` (STORY-011) | `administrative_routing` | `department_repository.search_by_name` | `department_name` (explicit name/phrase only — never inferred from symptoms) |
+
+`list_patient_documents` returns a deliberately NARROW field set per
+document — `id`, `document_type`, `status`, `original_filename`,
+`created_at` — never `storage_key`, `sha256`, `size_bytes`, or
+`uploaded_by_user_id`; see [DOCUMENTS.md](DOCUMENTS.md) "Download
+Safety" for the identical non-disclosure rule this tool also upholds.
+
+`resolve_department` never guesses: an ambiguous name (more than one
+active department matches) is a `ToolResult` FAILURE
+(`code="ambiguous_department"`) carrying a bounded candidate list,
+rather than picking one or making a second model round-trip (out of
+scope — Section 8/[AGENTS.md](AGENTS.md) Section 8's "at most one tool
+execution" limit).
 
 `check_availability` returns `{"available_times": [...]}` (bounded to
 the first 10 slots) or `{"available_times": []}` — never an error for
@@ -169,10 +189,12 @@ does the same at the full HTTP-request level.
 
 `app.ai.orchestration.AgentOrchestrationService` calls
 `WorkflowService.record_tool_invocation` immediately before dispatching
-a tool (appending a `tool_invoked` event, linked to the current step)
-and `complete_step`/`fail_step` immediately after, based on the tool's
-own `ToolResultStatus` — see [AI_SAFETY.md](AI_SAFETY.md) Section 10
-for the full event sequence and persistence policy.
+a tool (appending a `tool_invoked` event, linked to the CURRENT step —
+as of STORY-011, the specialist-execution step, not the coordination
+step that precedes it) and `complete_step`/`fail_step` immediately
+after, based on the tool's own `ToolResultStatus` — see
+[AI_SAFETY.md](AI_SAFETY.md) Section 10 and [AGENTS.md](AGENTS.md)
+Section 6 for the full event sequence and persistence policy.
 
 ## 9. How Future Tools Must Be Added Safely
 
@@ -204,18 +226,23 @@ for the full event sequence and persistence policy.
 
 ## 10. Current vs. Planned
 
-**Current**: the full contract (`ToolDefinition`/
-`ToolExecutionContext`/`ToolResult`/`ToolRegistry`); two real tools
-(`check_availability`, `book_appointment`); full workflow integration;
-comprehensive tests including cross-tenant and patient-self-scope
-adversarial cases.
+**Current (STORY-011)**: the full contract (`ToolDefinition`/
+`ToolExecutionContext`/`ToolResult`/`ToolRegistry`); four real tools
+(`check_availability`, `book_appointment`, `list_patient_documents`,
+`resolve_department`); full workflow integration, including the
+`agent_handoff` event; comprehensive tests including cross-tenant,
+patient-self-scope, and cross-agent-permission adversarial cases (see
+[AGENTS.md](AGENTS.md) Section 5).
+
+**`ToolRegistry` itself is still agent-agnostic** —
+`ToolRegistry.list_allowed()`/`.execute()` do not vary by which agent is
+calling; per-agent restriction is a separate, application-code layer
+(`AgentDefinition.allowed_tools`, checked in
+`AgentOrchestrationService`) — see [AGENTS.md](AGENTS.md) Section 5.
+This was a deliberate choice to keep this registry exactly as simple as
+STORY-010 built it, rather than teaching it a new "which agent" concept.
 
 **Explicitly not implemented** (later stories): `reschedule_appointment`/
-`cancel_appointment` tools (Section 6); document-related tools (checking
-document administrative status, requesting document collection); a
-department-name-to-`department_id` resolution tool (this story's tools
-take resolved UUIDs as arguments, not human-readable names); role-aware
-tool visibility (`ToolRegistry.list_allowed()` currently returns the
-same set to every caller — authorization is enforced inside each
-handler, not by hiding tools from the model); any tool exposing a
-clinical-decision capability, which must never exist.
+`cancel_appointment` tools (Section 6); a tool that requests document
+COLLECTION (upload) rather than merely checking status; any tool
+exposing a clinical-decision capability, which must never exist.

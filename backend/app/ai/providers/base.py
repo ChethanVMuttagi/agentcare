@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.ai.coordinator_decisions import CoordinatorDecision
 from app.ai.decisions import AdministrativeDecision
 
 
@@ -51,5 +52,20 @@ class LLMProvider(Protocol):
         Raises `app.ai.providers.errors.ProviderConfigurationError`,
         `ProviderUnavailableError`, `ProviderTimeoutError`, or
         `ProviderResponseError` — never a raw vendor exception.
+        """
+        ...
+
+    async def generate_coordinator_decision(
+        self, request: StructuredCompletionRequest
+    ) -> CoordinatorDecision:
+        """Return a validated `CoordinatorDecision` — the Coordinator
+        agent's distinct, narrower decision space (see
+        `app.ai.coordinator_decisions`), which structurally cannot
+        express a tool call. A SEPARATE method from `generate_structured`
+        (not a schema-parametrized single method) so STORY-010's existing
+        specialist-decision contract and tests are entirely unaffected by
+        the Coordinator's addition in STORY-011.
+
+        Raises the same controlled exceptions as `generate_structured`.
         """
         ...

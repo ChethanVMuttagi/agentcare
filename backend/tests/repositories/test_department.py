@@ -147,3 +147,78 @@ async def test_create_adds_and_flushes_without_committing(
         db_session, organization_id=org.id, department_id=department.id
     )
     assert result is None
+
+
+# --- search_by_name (STORY-011, added for app.ai.tools.routing_tools) ---
+
+
+async def test_search_by_name_matches_case_insensitively(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+) -> None:
+    org = await make_organization("repo-dept-search")
+    facility = await make_facility(org, "repo-dept-search")
+    department = await make_department(org, facility, "REPO-SEARCH-CARD", name="Cardiology")
+
+    results = await department_repository.search_by_name(
+        db_session, organization_id=org.id, name_query="cardio"
+    )
+
+    assert [d.id for d in results] == [department.id]
+
+
+async def test_search_by_name_excludes_inactive_departments(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+) -> None:
+    org = await make_organization("repo-dept-search-inactive")
+    facility = await make_facility(org, "repo-dept-search-inactive")
+    await make_department(
+        org, facility, "REPO-SEARCH-INACTIVE", name="Retired Ward", is_active=False
+    )
+
+    results = await department_repository.search_by_name(
+        db_session, organization_id=org.id, name_query="Retired"
+    )
+
+    assert results == []
+
+
+async def test_search_by_name_is_scoped_to_organization(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+) -> None:
+    org_a = await make_organization("repo-dept-search-cross-a")
+    org_b = await make_organization("repo-dept-search-cross-b")
+    facility_b = await make_facility(org_b, "repo-dept-search-cross-b")
+    await make_department(org_b, facility_b, "REPO-SEARCH-CROSS-B", name="Oncology")
+
+    results = await department_repository.search_by_name(
+        db_session, organization_id=org_a.id, name_query="Oncology"
+    )
+
+    assert results == []
+
+
+async def test_search_by_name_respects_limit(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+) -> None:
+    org = await make_organization("repo-dept-search-limit")
+    facility = await make_facility(org, "repo-dept-search-limit")
+    for i in range(3):
+        await make_department(org, facility, f"REPO-SEARCH-LIMIT-{i}", name=f"Radiology {i}")
+
+    results = await department_repository.search_by_name(
+        db_session, organization_id=org.id, name_query="Radiology", limit=2
+    )
+
+    assert len(results) == 2

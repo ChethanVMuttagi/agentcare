@@ -49,6 +49,36 @@ async def get_by_facility_and_code(
     return result.scalar_one_or_none()
 
 
+async def search_by_name(
+    session: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    name_query: str,
+    limit: int = 10,
+) -> Sequence[Department]:
+    """Case-insensitive substring match against `Department.name`,
+    restricted to `is_active` departments, scoped to `organization_id`.
+
+    Added in STORY-011 for `app.ai.tools.routing_tools.resolve_department`
+    — no existing repository function here supported name-based lookup
+    (only `get_by_id`/`get_by_facility_and_code`/`list_by_organization`
+    did). Returns every match up to `limit`; the caller decides what to
+    do with more than one (see `resolve_department`'s "ambiguous match"
+    handling — this function itself never guesses).
+    """
+    result = await session.execute(
+        select(Department)
+        .where(
+            Department.organization_id == organization_id,
+            Department.is_active.is_(True),
+            Department.name.ilike(f"%{name_query}%"),
+        )
+        .order_by(Department.name)
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
 async def list_by_organization(
     session: AsyncSession,
     *,

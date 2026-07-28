@@ -46,12 +46,17 @@ class AgentExecuteResponse(BaseModel):
     result message. `tool_result_data`, when present, is the same
     bounded, pre-sanitized `dict` a tool handler returned (see
     `app.ai.tools.base.ToolResult`) — never a raw ORM object, SQL error,
-    or arbitrary payload.
+    or arbitrary payload. `handled_by_agent` (STORY-011) is the stable
+    agent name that produced the final outcome — `"coordinator"`,
+    `"scheduling"`, `"document"`, or `"routing"` — never a provider or
+    model name, and never anything resembling the Coordinator's
+    reasoning for its choice.
     """
 
     workflow_id: uuid.UUID
     workflow_status: WorkflowStatus
     decision_kind: DecisionKind
+    handled_by_agent: str
     message: str
     tool_name: str | None
     tool_result_code: str | None

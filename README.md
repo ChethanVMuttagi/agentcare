@@ -45,8 +45,8 @@ or agent workflows exist.
   [docs/DOCUMENTS.md](docs/DOCUMENTS.md),
   [docs/WORKFLOWS.md](docs/WORKFLOWS.md),
   [docs/AI_SAFETY.md](docs/AI_SAFETY.md), [docs/TOOLS.md](docs/TOOLS.md),
-  and the Architecture Decision Record process
-  ([docs/adr/](docs/adr/README.md))
+  [docs/AGENTS.md](docs/AGENTS.md), and the Architecture Decision Record
+  process ([docs/adr/](docs/adr/README.md))
 - PR template with security/safety checks
 - **FastAPI backend application foundation** (`backend/app/`): an
   application factory with lifespan-managed resource cleanup, versioned
@@ -223,20 +223,44 @@ or agent workflows exist.
   [docs/AI_SAFETY.md](docs/AI_SAFETY.md), [docs/TOOLS.md](docs/TOOLS.md),
   and
   [docs/adr/ADR-0010-llm-and-tool-security-boundary.md](docs/adr/ADR-0010-llm-and-tool-security-boundary.md).
+- **Genuine multi-agent coordination** (`app/ai/agents/`,
+  `app/ai/coordinator_decisions.py`): a Coordinator agent that decides
+  whether to hand off to ONE of three genuinely distinct specialists
+  (Scheduling, Document, Routing) — not a renamed copy of a single
+  universal agent. The Coordinator's decision type structurally CANNOT
+  express a tool call (no such variant exists in its schema); each
+  specialist has its own system prompt and its own tool allowlist,
+  enforced in application code BEFORE the tool registry is ever
+  consulted — proven directly by tests that a Document specialist
+  cannot call `book_appointment`, a Scheduling specialist cannot call
+  `list_patient_documents`, and a Routing specialist cannot call
+  `book_appointment`. Two new tools (`list_patient_documents`,
+  `resolve_department`), each calling the real existing service/
+  repository layer. A successful handoff is durably persisted (a new
+  `agent_handoff` audit event plus a second `WorkflowStep`) — never
+  fabricated. Still ONE Coordinator decision, AT MOST one handoff, AT
+  MOST one specialist decision, AT MOST one tool execution — no
+  recursion, no specialist-to-specialist handoff, no autonomous loop.
+  Backed by AgentCare's ninth Alembic migration. See
+  [docs/AGENTS.md](docs/AGENTS.md) and
+  [docs/adr/ADR-0011-multi-agent-coordination.md](docs/adr/ADR-0011-multi-agent-coordination.md).
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app,
   real (SQLite-backed, for isolation) infrastructure-level database
   behavior, all fourteen domain models, password hashing, JWT handling,
   the auth API, the full patient/department/practitioner/availability/
-  appointment/document/workflow/AI-tool repository/service/API layers
-  end-to-end against real PostgreSQL, dedicated real-concurrency tests
-  proving both the appointment double-booking guarantee AND the
+  appointment/document/workflow/AI-tool/multi-agent repository/service/API
+  layers end-to-end against real PostgreSQL, dedicated real-concurrency
+  tests proving both the appointment double-booking guarantee AND the
   workflow-transition race guarantee under genuinely concurrent
   transactions, a dedicated persistence/restart proof for workflow
-  state, a mandatory end-to-end proof that an AI-assisted patient
-  request genuinely persists a real appointment and a full workflow
-  audit trail, a full adversarial/security test suite (hostile tool
-  names, prompt-injection attempts, cross-tenant/cross-patient
-  rejection, malformed model output), and filesystem-storage/
+  state, TWO mandatory end-to-end proofs that an AI-assisted patient
+  request genuinely persists real state and a full multi-agent workflow
+  audit trail — one via a Scheduling handoff, one via a Document
+  handoff, so the architecture is proven not to be hardwired only for
+  scheduling — a full adversarial/security test suite (hostile tool
+  names, prompt-injection attempts including cross-agent injection
+  phrases, cross-tenant/cross-patient rejection, malformed model output,
+  cross-agent permission-denial cases), and filesystem-storage/
   file-signature tests using only temporary directories (never a
   tracked path) — every AI-related test uses a deterministic fake LLM
   provider, never a real network call or API key
@@ -259,12 +283,12 @@ or agent workflows exist.
 - Patient update/delete; finer-grained permissions beyond `Role`; refresh
   tokens; token revocation; password reset; email verification; MFA;
   OAuth/social login; public user registration
-- The final multi-agent architecture, agent-to-agent delegation,
-  LangGraph-based orchestration, and autonomous multi-step decision
-  loops — the LLM/tool-calling foundation above (STORY-010) implements
-  ONE model decision leading to AT MOST one tool execution; multi-step
-  planning and multi-agent coordination are the next story's work, built
-  on top of this foundation, not a redesign of it
+- Unrestricted multi-step planning, specialist-to-specialist delegation,
+  LangGraph-based orchestration, and autonomous decision loops — the
+  multi-agent foundation above (STORY-011) implements ONE Coordinator
+  decision leading to AT MOST one handoff and AT MOST one specialist
+  tool execution; open-ended multi-step planning is a future story's
+  work, built on top of this foundation, not a redesign of it
 - A general-purpose security/compliance audit system (distinct from
   `WorkflowEvent`'s own workflow-lifecycle audit trail — see
   [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Section 18)
@@ -314,15 +338,15 @@ recommendation, or any function that constitutes the practice of medicine.
 |---|---|---|
 | Backend API | Python, FastAPI | Implemented |
 | Configuration | Pydantic Settings | Implemented |
-| Database | PostgreSQL | Implemented (11 tables — see below) |
-| ORM | SQLAlchemy 2.x | Implemented (11 models, incl. composite-FK ownership integrity + GiST `EXCLUDE` constraints) |
-| Migrations | Alembic | Implemented (6 migrations, validated against real PostgreSQL) |
+| Database | PostgreSQL | Implemented (14 domain tables — see below) |
+| ORM | SQLAlchemy 2.x | Implemented (14 models, incl. composite-FK ownership integrity + GiST `EXCLUDE` constraints) |
+| Migrations | Alembic | Implemented (9 migrations, validated against real PostgreSQL) |
 | Authentication | Argon2id password hashing + JWT (PyJWT) | Implemented (`POST /auth/token`, `GET /auth/me`) |
-| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient + scheduling-resource + appointment + document APIs |
-| Repository/Service layers | `app/repositories/`, `app/services/` | Implemented for `Patient`, scheduling resources, `Appointment`, and `PatientDocument`; not yet for `Organization`/`Facility` |
+| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient + scheduling-resource + appointment + document + workflow + agent APIs |
+| Repository/Service layers | `app/repositories/`, `app/services/` | Implemented for `Patient`, scheduling resources, `Appointment`, `PatientDocument`, and `WorkflowRun`/`Step`/`Event`; not yet for `Organization`/`Facility` |
 | Document storage | `app/storage/` (`DocumentStorage` abstraction) | Implemented — filesystem-backed `LocalDocumentStorage` (local dev only); production object-storage backend planned |
-| Agent Orchestration | LangGraph | Planned |
-| LLM Access | Provider-abstracted (Groq / OpenAI / Anthropic) | Planned |
+| Multi-Agent Coordination | `app/ai/agents/` (Coordinator + 3 specialists) | Implemented — see [docs/AGENTS.md](docs/AGENTS.md). No LangGraph adopted (see [ADR-0011](docs/adr/ADR-0011-multi-agent-coordination.md)) |
+| LLM Access | Provider-abstracted (`app/ai/providers/`) | Implemented — Anthropic Claude; a second provider (Groq/OpenAI) needs a new adapter only, no contract change |
 | Frontend | Next.js | Planned |
 | Containerization | Docker | Planned |
 
@@ -447,20 +471,24 @@ file bytes — plus a storage reference; see
 [docs/DOCUMENTS.md](docs/DOCUMENTS.md)), the `workflow_runs`/
 `workflow_steps`/`workflow_events` tables (durable workflow-lifecycle
 state and an append-only audit trail — see
-[docs/WORKFLOWS.md](docs/WORKFLOWS.md)), and one further migration
-extending `workflow_events` (a `sequence` ordering column and one new
-event type, `tool_invoked`, for the safe LLM & tool-calling foundation
-— see [docs/AI_SAFETY.md](docs/AI_SAFETY.md)/[docs/TOOLS.md](docs/TOOLS.md)).
+[docs/WORKFLOWS.md](docs/WORKFLOWS.md)), and two further migrations
+extending `workflow_events` only (no new table): a `sequence` ordering
+column and one new event type, `tool_invoked`, for the safe LLM &
+tool-calling foundation (see
+[docs/AI_SAFETY.md](docs/AI_SAFETY.md)/[docs/TOOLS.md](docs/TOOLS.md)),
+and one more new event type, `agent_handoff`, for genuine multi-agent
+coordination (see [docs/AGENTS.md](docs/AGENTS.md)).
 See [docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow
 and testing strategy (SQLite is used only for isolated infrastructure-level
 tests; PostgreSQL remains the production database and is what every
 domain model, repository, service, and API test suite — including
 dedicated real-concurrency tests for both appointment booking and
-workflow transitions, and the mandatory end-to-end AI-tool-execution
-proof — runs against; document storage tests use only pytest-managed
-temporary directories, never the real configured
-`DOCUMENT_STORAGE_PATH`; AI/tool-calling tests use a deterministic fake
-LLM provider, never a real network call or API key).
+workflow transitions, and the two mandatory end-to-end multi-agent
+proofs (Scheduling handoff and Document handoff) — runs against;
+document storage tests use only pytest-managed temporary directories,
+never the real configured `DOCUMENT_STORAGE_PATH`; AI/multi-agent tests
+use a deterministic fake LLM provider, never a real network call or API
+key).
 
 Run the test suite and quality checks from `backend/`:
 

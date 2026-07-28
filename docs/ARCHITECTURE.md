@@ -244,6 +244,26 @@ What exists today:
   (one new event type, `tool_invoked`). See
   [AI_SAFETY.md](AI_SAFETY.md), [TOOLS.md](TOOLS.md), and
   [adr/ADR-0010-llm-and-tool-security-boundary.md](adr/ADR-0010-llm-and-tool-security-boundary.md).
+- **Genuine multi-agent coordination** (`app/ai/agents/`,
+  `app/ai/coordinator_decisions.py` — STORY-011): a Coordinator agent
+  that decides whether to hand off to one of three specialists
+  (Scheduling, Document, Routing) — never all four renamed copies of
+  the same prompt/tool set. The Coordinator's decision type
+  (`CoordinatorDecision`) has NO `tool_call` variant at all — it cannot
+  execute a domain tool, structurally, not merely by convention. Each
+  specialist has its OWN system prompt and its OWN tool allowlist,
+  enforced in application code (`AgentOrchestrationService`) BEFORE the
+  still-agent-agnostic `ToolRegistry` is ever consulted — proven by
+  explicit cross-agent denial tests (e.g. Document cannot call
+  `book_appointment`). Two new tools
+  (`list_patient_documents`, `resolve_department`), each calling the
+  REAL existing service/repository layer. A successful handoff is
+  durably persisted (`agent_handoff` event, a second `WorkflowStep`) —
+  never fabricated. Still exactly one Coordinator decision, at most one
+  handoff, at most one specialist decision, at most one tool execution —
+  no recursion, no specialist-to-specialist handoff, no autonomous loop.
+  See [AGENTS.md](AGENTS.md) and
+  [adr/ADR-0011-multi-agent-coordination.md](adr/ADR-0011-multi-agent-coordination.md).
 - A structured logging foundation (level, timestamp, logger name, message)
   with an explicit rule against logging secrets or patient data — this
   now explicitly includes never logging `JWT_SECRET_KEY`, issued tokens,
@@ -273,11 +293,12 @@ opposed to the appointment-overlap check, which IS race-proof — see
 [APPOINTMENTS.md](APPOINTMENTS.md)); general-purpose patient-readable
 department/practitioner discovery endpoints; malware scanning or a
 production object-storage backend for documents (see
-[DOCUMENTS.md](DOCUMENTS.md) Section 20); the final multi-agent
-architecture, agent-to-agent delegation, any LangGraph integration, or
-an autonomous multi-step decision loop (STORY-010 implements ONE model
-decision leading to AT MOST one tool call — see
-[AI_SAFETY.md](AI_SAFETY.md) Section 11); reschedule/cancel AI tools
+[DOCUMENTS.md](DOCUMENTS.md) Section 20); unrestricted multi-step
+planning, specialist-to-specialist delegation, any LangGraph
+integration, or an autonomous multi-step decision loop (STORY-011
+implements ONE Coordinator decision leading to AT MOST one handoff and
+AT MOST one specialist tool call — see [AGENTS.md](AGENTS.md) Section
+8); reschedule/cancel AI tools
 (see [TOOLS.md](TOOLS.md) Section 6); a general-purpose security/
 compliance audit system (distinct from `WorkflowEvent`'s own
 workflow-lifecycle audit trail — see [WORKFLOWS.md](WORKFLOWS.md)
@@ -333,18 +354,24 @@ Everything in this section is direction, not current behavior.
 - **Finer-grained permissions** beyond the current closed `Role` enum
   (`admin`/`staff`/`patient`), refresh tokens, and token
   revocation/session control — see [RBAC.md](RBAC.md) Sections 9 and 11.
-- **The final multi-agent architecture and LangGraph-based coordination**
-  for multi-step tasks (scheduling, intake, referrals, follow-ups)
-  spanning more than one model decision. STORY-010 built the
-  provider-independent LLM abstraction, structured-decision contract,
-  safety policy, and explicit tool registry this will be built ON TOP
-  OF (see [AI_SAFETY.md](AI_SAFETY.md) and [TOOLS.md](TOOLS.md)) — it
-  deliberately implements only ONE model decision leading to AT MOST
-  ONE tool execution, never an autonomous multi-step loop or
-  agent-to-agent delegation. Any future multi-step agent must continue
-  to respect the administrative-routing-is-not-diagnosis boundary — see
+- **Unrestricted multi-step planning and LangGraph-based coordination**
+  spanning MORE than one Coordinator decision or specialist-to-specialist
+  delegation. STORY-011 built genuine (but deliberately bounded)
+  multi-agent coordination — a Coordinator that hands off to at most one
+  of three specialists — ON TOP OF STORY-010's provider-independent LLM
+  abstraction, structured-decision contract, safety policy, and explicit
+  tool registry (see [AGENTS.md](AGENTS.md),
+  [AI_SAFETY.md](AI_SAFETY.md), and [TOOLS.md](TOOLS.md)). No LangGraph
+  or other orchestration framework was adopted — see
+  [adr/ADR-0011-multi-agent-coordination.md](adr/ADR-0011-multi-agent-coordination.md)
+  "Alternatives Considered" for why a fixed, small, fully-specified
+  handoff shape didn't need one. Any future story that needs genuinely
+  open-ended multi-step planning or specialist-to-specialist
+  collaboration must continue to respect the
+  administrative-routing-is-not-diagnosis boundary — see
   [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 14 and
-  [AI_SAFETY.md](AI_SAFETY.md) Section 7.
+  [AI_SAFETY.md](AI_SAFETY.md) Section 7 — and needs its own ADR before
+  relaxing STORY-011's execution limits.
 - **Docker** packaging for consistent local/dev/prod environments.
 - **A Next.js frontend** consuming the versioned API.
 
@@ -376,8 +403,12 @@ for secure document management in STORY-008** (`documents.py` →
 additional `app.storage.DocumentStorage` collaborator the service
 depends on for object bytes — see [DOCUMENTS.md](DOCUMENTS.md)) — now
 demonstrated across four independent domains, the pattern every future
-domain resource is expected to follow. `Workflow`/`Agent`/`Tool` remain
-PLANNED (Section 3) — no agentic coordination exists yet.
+domain resource is expected to follow. `Agent`/`Tool` are now CURRENT
+(STORY-010/STORY-011 — see [AGENTS.md](AGENTS.md), [TOOLS.md](TOOLS.md)),
+implemented as `app.ai.agents`/`app.ai.tools` rather than a `Workflow`
+(LangGraph) layer, which remains PLANNED and, per
+[ADR-0011](adr/ADR-0011-multi-agent-coordination.md), was deliberately
+not adopted for this story's fixed, small coordination shape.
 
 Routes stay thin: they parse/validate input, call a service, and shape the
 response. Services hold business rules AND own the transaction boundary
@@ -389,23 +420,27 @@ check passes; repositories only ever add/flush — see
 [PATIENTS.md](PATIENTS.md) Section 6,
 [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 10, and
 [DATABASE.md](DATABASE.md) "Transaction Ownership Philosophy").
-`AgentOrchestrationService` (STORY-010) follows the same rule for
-AI-driven execution: it never touches a repository or session directly,
-only `WorkflowService` and `ToolRegistry.execute` — see Section 5. Full
-multi-step agent coordination remains PLANNED (Section 3); STORY-010's
-model never bypasses its tools to act directly on the system, and
-neither will any future multi-step agent built on top of it.
+`AgentOrchestrationService` (STORY-010, extended for multi-agent
+coordination in STORY-011) follows the same rule for AI-driven
+execution: it never touches a repository or session directly, only
+`WorkflowService`, `AgentRegistry`, and `ToolRegistry.execute` — see
+Section 5. Unrestricted multi-step planning remains PLANNED (Section 3);
+neither the Coordinator nor any specialist bypasses its tools to act
+directly on the system, and neither will any future agent built on top
+of this architecture.
 
 ## 5. Why Agents Will Not Directly Access the Database
 
-**Realized in STORY-010** (`app/ai/tools/` — see [TOOLS.md](TOOLS.md)):
-the model interacts with data exclusively through explicit, narrow
-**tools** — never through a direct database session or repository call.
-Verified structurally, not merely by convention: `app.ai` never imports
-`app.repositories` or `AsyncSession` in any way a model-controlled
-value could influence; every tool handler calls the SAME
-`app.services.*` functions every human-driven route already calls.
-Reasons this boundary is structural:
+**Realized in STORY-010, unchanged in STORY-011** (`app/ai/tools/` —
+see [TOOLS.md](TOOLS.md)): the model — Coordinator OR any specialist —
+interacts with data exclusively through explicit, narrow **tools**
+(and, for the Coordinator, not even that — it has no tools at all; see
+[AGENTS.md](AGENTS.md) Section 3) — never through a direct database
+session or repository call. Verified structurally, not merely by
+convention: `app.ai` never imports `app.repositories` or `AsyncSession`
+in any way a model-controlled value could influence; every tool handler
+calls the SAME `app.services.*` functions every human-driven route
+already calls. Reasons this boundary is structural:
 
 - **Auditability**: a tool call is a discrete, loggable, reviewable
   action — durably recorded as a `tool_invoked` `WorkflowEvent` (see

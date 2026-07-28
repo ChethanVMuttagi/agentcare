@@ -9,9 +9,11 @@ STORY-007 (the `appointments` table, a fifth migration, and the
 `btree_gist` PostgreSQL extension), STORY-008 (the
 `patient_documents` table and a sixth migration — metadata only, no file
 bytes), STORY-009 (the `workflow_runs`/`workflow_steps`/
-`workflow_events` tables and a seventh migration), and STORY-010 (an
+`workflow_events` tables and a seventh migration), STORY-010 (an
 eighth migration extending `workflow_events` — no new table — for the
-safe LLM & tool-calling foundation) — see
+safe LLM & tool-calling foundation), and STORY-011 (a ninth migration,
+again extending `workflow_events` only — no new table — for genuine
+multi-agent coordination) — see
 [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for the model itself,
 [RBAC.md](RBAC.md) for the identity/authorization model,
 [PATIENTS.md](PATIENTS.md) for the patient domain,
@@ -19,8 +21,10 @@ safe LLM & tool-calling foundation) — see
 resource domain, [APPOINTMENTS.md](APPOINTMENTS.md) for the appointment
 booking engine, [DOCUMENTS.md](DOCUMENTS.md) for the secure document
 management capability, [WORKFLOWS.md](WORKFLOWS.md) for the persistent
-workflow engine these tables back, and [AI_SAFETY.md](AI_SAFETY.md)/
-[TOOLS.md](TOOLS.md) for the STORY-010 capability built on top of it.
+workflow engine these tables back, [AI_SAFETY.md](AI_SAFETY.md)/
+[TOOLS.md](TOOLS.md) for the STORY-010 capability built on top of it,
+and [AGENTS.md](AGENTS.md) for the STORY-011 multi-agent capability
+built on top of THAT.
 It follows the same CURRENT vs. PLANNED discipline as
 [ARCHITECTURE.md](ARCHITECTURE.md): everything described here as
 implemented exists in the repository today; anything marked PLANNED
@@ -433,6 +437,27 @@ Alembic is configured under `backend/` (`backend/alembic.ini`,
   column and the added `CHECK` value are cleanly removed and all
   fourteen other tables/columns are untouched), and re-applied cleanly.
   Contains no seeded data or credentials — only schema DDL.
+- **Ninth migration (STORY-011)**: `b5456329cbdd_add_agent_handoff_event_type.py`
+  (`down_revision = "5354c755424b"`) extends the `workflow_event_type`
+  `CHECK` constraint with one new value, `agent_handoff` — see
+  [AGENTS.md](AGENTS.md) and [WORKFLOWS.md](WORKFLOWS.md) Section 5. No
+  column change this time — only the constraint's allowed value set,
+  using the exact same drop/recreate-under-the-original-name technique
+  as the eighth migration. Validated against real PostgreSQL on a
+  NON-EMPTY `workflow_events` table (synthetic pre-existing rows using
+  only pre-STORY-011 event types, inserted before the migration ran):
+  applied cleanly with all pre-existing rows and their `event_type`
+  values verified intact afterward; a genuine `agent_handoff` row was
+  then inserted and confirmed accepted; a bogus event type was confirmed
+  still rejected; a downgrade attempt WHILE that `agent_handoff` row
+  still existed was confirmed to correctly FAIL
+  (`CheckViolationError`) and roll back atomically (alembic's current
+  revision unchanged) rather than silently succeeding or leaving a
+  partially-applied constraint; the row was then removed and the
+  downgrade was confirmed to succeed, followed by a clean re-upgrade
+  back to head. Contains no seeded data or credentials — only schema
+  DDL; all synthetic rows used for this validation were deleted
+  afterward and confirmed gone.
 
 ## 9. Migration Commands
 
@@ -639,6 +664,26 @@ DATABASE_URL=postgresql+asyncpg://agentcare_user:changeme@localhost:5432/agentca
   `WorkflowStep`/`WorkflowEvent` -> safe API response — re-querying
   PostgreSQL directly afterward rather than trusting the HTTP response
   alone.
+- **Multi-agent coordination tests (STORY-011)** (`backend/tests/ai/test_agents.py`,
+  `test_document_tools.py`, `test_routing_tools.py`, the rewritten
+  `test_orchestration.py`, and the rewritten
+  `backend/tests/api/test_agent_endpoints.py`) — `test_agents.py`'s
+  `AgentRegistry`/`CoordinatorDecision` schema tests need no database
+  and run unconditionally; every other file runs against real
+  PostgreSQL under the same savepoint isolation, using
+  `FakeLLMProvider`'s independent coordinator/specialist configuration
+  trios (`app.ai.providers.fake_provider`) — never a real Anthropic
+  call. TWO mandatory full end-to-end proofs exist (not one): the
+  scheduling-handoff path (as STORY-010's, now asserting the full
+  two-step, `agent_handoff`-inclusive event chain) and a SEPARATE,
+  equally rigorous Document-handoff path
+  (`test_full_chain_document_handoff_is_also_genuinely_wired`), proving
+  the architecture is not secretly hardwired only for scheduling — both
+  re-query PostgreSQL directly afterward rather than trusting the HTTP
+  response alone. Explicit cross-agent permission-denial tests (Document
+  -> `book_appointment`, Scheduling -> `list_patient_documents`, Routing
+  -> `book_appointment`) prove the per-agent tool allowlist is enforced
+  in application code, not merely asserted in a docstring.
 - This story also fixed a genuine flaky-ordering bug it discovered in
   its own mandatory pre-check baseline run: `WorkflowRun` and
   `PatientDocument` "newest first" listing tests could occasionally

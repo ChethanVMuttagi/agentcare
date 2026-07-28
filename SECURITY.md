@@ -177,6 +177,19 @@ statement that AgentCare is not a diagnosis or treatment system.
   (`app.ai.safety.SafetyPolicy`) refuses symptom-based or
   medication/dosage requests BEFORE the model is ever called — see
   [docs/AI_SAFETY.md](docs/AI_SAFETY.md) Section 7.
+- As of STORY-011, this codebase implements genuine multi-agent
+  coordination (`app/ai/agents/`, `app/ai/coordinator_decisions.py` —
+  see [docs/AGENTS.md](docs/AGENTS.md)). The same untrusted-model
+  posture applies to EVERY agent — Coordinator and each specialist —
+  identically; the Coordinator additionally CANNOT execute any domain
+  tool at all, a structural (schema-level) guarantee, not a runtime
+  check. A handoff between agents carries only a specialist's stable
+  name plus an optional bounded category string — never a
+  Coordinator-composed prompt, never patient PII/PHI beyond what the
+  original request text or a resolved tool argument already contained.
+  No agent may change organization/user/role/patient-self-scope —
+  proven by explicit adversarial tests (see
+  [docs/AGENTS.md](docs/AGENTS.md) Section 7).
 
 ## 8. Synthetic / Anonymized Test Data Requirement
 
@@ -239,6 +252,15 @@ statement that AgentCare is not a diagnosis or treatment system.
   generic message before it reaches any log statement or API response —
   never the vendor exception's own text, which could include request
   detail.
+- As of STORY-011, the same applies to `app/ai/agents/` and
+  `app/ai/coordinator_decisions.py`: never logged — a specialist's or
+  the Coordinator's system prompt, a Coordinator's `task_category` free
+  text, or any provider response from either the coordinator or
+  specialist decision call. Only safe, bounded values ever reach
+  persistence or logs: agent names (`"coordinator"`/`"scheduling"`/
+  `"document"`/`"routing"`), tool names, and safe result/failure codes
+  (e.g. `"forbidden_tool"`) — see [docs/AGENTS.md](docs/AGENTS.md)
+  Section 6.
 
 ## 10. Medical Document Handling Considerations
 

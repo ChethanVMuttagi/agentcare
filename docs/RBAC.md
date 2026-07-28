@@ -298,17 +298,23 @@ same server-derived patient identity, plus ADMIN/STAFF-only
 cancellation (STORY-009 — see [WORKFLOWS.md](WORKFLOWS.md) Sections
 20-21); `POST .../agent/execute`, RBAC-enforced with the same
 server-derived patient identity — a `PATIENT` caller's identity always
-wins over anything a model decision supplies as a tool argument, never
-merely validated against it (STORY-010 — see
-[AI_SAFETY.md](AI_SAFETY.md) and [TOOLS.md](TOOLS.md) Section 3).
+wins over anything a Coordinator or specialist decision supplies as a
+tool argument, never merely validated against it (STORY-010, extended
+for multi-agent coordination in STORY-011 — see
+[AI_SAFETY.md](AI_SAFETY.md), [TOOLS.md](TOOLS.md) Section 3, and
+[AGENTS.md](AGENTS.md) Section 7 "Authorization Cannot Cross the
+Handoff Boundary" — a handoff to a specialist changes WHICH agent
+handles a request, never the authenticated identity/role/patient-scope
+it is authorized to act as).
 
 **Explicitly not implemented** (belong to later stories): appointment
 completion workflow, malware scanning, a production document-storage
-backend, the final multi-agent architecture, agent-to-agent delegation,
-LangGraph integration, or an autonomous multi-step decision loop
-(STORY-010 implements ONE model decision leading to AT MOST one tool
-call, RBAC-enforced identically to every other route — see
-[AI_SAFETY.md](AI_SAFETY.md) Section 11), refresh tokens, password reset,
+backend, unrestricted multi-step planning, specialist-to-specialist
+delegation, LangGraph integration, or an autonomous multi-step decision
+loop (STORY-011 implements ONE Coordinator decision leading to AT MOST
+one handoff and AT MOST one specialist tool call, RBAC-enforced
+identically to every other route — see [AGENTS.md](AGENTS.md) Section
+8), refresh tokens, password reset,
 email verification, MFA, OAuth/social login, public registration, a
 general-purpose security/compliance audit-event system (distinct from
 `WorkflowEvent`'s own workflow-lifecycle audit trail — see

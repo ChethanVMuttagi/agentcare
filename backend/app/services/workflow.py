@@ -732,6 +732,51 @@ class WorkflowService:
         await self._session.commit()
         return event
 
+    async def record_agent_handoff(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        workflow_run_id: uuid.UUID,
+        step_id: uuid.UUID,
+        actor_type: ActorType,
+        actor_identifier: str,
+        from_agent: str,
+        to_agent: str,
+    ) -> WorkflowEvent:
+        """Append an `AGENT_HANDOFF` event for `step_id` (STORY-011) —
+        directly mirrors `record_tool_invocation`: does NOT change the
+        step's status; it is a pure audit-trail addition recording "the
+        Coordinator handed this request to a specialist," distinct from
+        either step starting or finishing. `safe_metadata` carries ONLY
+        the safe `from_agent`/`to_agent` names — never the Coordinator's
+        reasoning for the choice, and never any free-form text. Commits
+        immediately (there is no corresponding state transition to keep
+        atomic with here, unlike `_transition_run`/`_transition_step`).
+        """
+        step = await workflow_step_repository.get_by_id(
+            self._session,
+            organization_id=organization_id,
+            workflow_run_id=workflow_run_id,
+            step_id=step_id,
+        )
+        if step is None:
+            raise WorkflowStepNotFoundError("No step found with this id in this workflow.")
+
+        event = await workflow_event_repository.create(
+            self._session,
+            WorkflowEvent(
+                organization_id=organization_id,
+                workflow_run_id=workflow_run_id,
+                workflow_step_id=step_id,
+                event_type=WorkflowEventType.AGENT_HANDOFF,
+                actor_type=actor_type,
+                actor_identifier=actor_identifier,
+                safe_metadata={"from_agent": from_agent, "to_agent": to_agent},
+            ),
+        )
+        await self._session.commit()
+        return event
+
 
 __all__ = [
     "WorkflowConflictError",
