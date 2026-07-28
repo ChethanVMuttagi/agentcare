@@ -1,0 +1,117 @@
+import type { Metadata } from "next";
+
+import { BreakdownBars } from "@/components/ui/bar-chart";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ErrorState } from "@/components/ui/error-state";
+import { StatCard } from "@/components/ui/stat-card";
+import { requireSession } from "@/lib/require-session";
+import { formatDateTime, settle } from "@/lib/utils";
+import { getAnalyticsSummary } from "@/services/analytics";
+
+export const metadata: Metadata = { title: "Analytics — AgentCare" };
+
+export default async function AnalyticsPage({
+  params,
+}: {
+  params: Promise<{ organizationId: string }>;
+}) {
+  const { organizationId } = await params;
+  const session = await requireSession();
+
+  const result = await settle(getAnalyticsSummary({ token: session.token, organizationId }));
+
+  if (!result.success) {
+    return <ErrorState error={result.error} title="Couldn't load analytics" />;
+  }
+
+  const summary = result.data;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">Analytics</h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          Organization-wide activity as of {formatDateTime(summary.generated_at)}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <StatCard label="Workflows" value={summary.workflows_total} />
+        <StatCard label="Appointments" value={summary.appointments_total} />
+        <StatCard label="Approvals" value={summary.approvals_total} />
+        <StatCard label="Patients" value={summary.patients_total} />
+        <StatCard label="Documents" value={summary.documents_total} />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Workflows by status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BreakdownBars data={summary.workflows_by_status} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Workflows by request type</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BreakdownBars data={summary.workflows_by_request_type} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Appointments by status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BreakdownBars data={summary.appointments_by_status} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Approvals by status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BreakdownBars data={summary.approvals_by_status} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Documents by status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BreakdownBars data={summary.documents_by_status} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Agent activity</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-slate-500 dark:text-slate-400">Tool invocations</p>
+                <p className="text-xl font-semibold text-slate-900 dark:text-slate-100">
+                  {summary.tool_invocations_total}
+                </p>
+              </div>
+              <div>
+                <p className="text-slate-500 dark:text-slate-400">Agent handoffs</p>
+                <p className="text-xl font-semibold text-slate-900 dark:text-slate-100">
+                  {summary.agent_handoffs_total}
+                </p>
+              </div>
+            </div>
+            <BreakdownBars data={summary.agent_handoffs_by_target} tone="info" />
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
