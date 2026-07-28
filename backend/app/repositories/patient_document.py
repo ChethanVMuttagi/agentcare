@@ -13,10 +13,10 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.patient_document import PatientDocument
+from app.models.patient_document import DocumentStatus, PatientDocument
 
 
 async def get_by_id(
@@ -52,6 +52,20 @@ async def list_by_patient(
         .offset(offset)
     )
     return result.scalars().all()
+
+
+async def count_by_status(
+    session: AsyncSession, *, organization_id: uuid.UUID
+) -> dict[DocumentStatus, int]:
+    """Organization-wide document counts grouped by `status` — the
+    documents breakdown for the Milestone B analytics summary
+    (`app.api.v1.endpoints.analytics`)."""
+    result = await session.execute(
+        select(PatientDocument.status, func.count())
+        .where(PatientDocument.organization_id == organization_id)
+        .group_by(PatientDocument.status)
+    )
+    return {status: count for status, count in result.all()}
 
 
 async def create(session: AsyncSession, document: PatientDocument) -> PatientDocument:

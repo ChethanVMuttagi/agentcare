@@ -9,6 +9,7 @@ list of import comments in `migrations/env.py` itself.
 """
 
 from app.models.appointment import Appointment, AppointmentStatus
+from app.models.approval import ApprovalRequest, ApprovalStatus, ApprovalType
 from app.models.department import Department
 from app.models.facility import Facility, FacilityType
 from app.models.membership import OrganizationMembership, Role
@@ -23,6 +24,13 @@ from app.models.patient_document import (
 from app.models.practitioner import Practitioner, PractitionerType
 from app.models.practitioner_availability import DayOfWeek, PractitionerAvailability
 from app.models.practitioner_department import PractitionerDepartment
+from app.models.reminder import (
+    Reminder,
+    ReminderAttempt,
+    ReminderAttemptStatus,
+    ReminderStatus,
+    ReminderType,
+)
 from app.models.user import User
 from app.models.workflow import (
     ActorType,
@@ -37,6 +45,9 @@ from app.models.workflow import (
 
 __all__ = [
     "ActorType",
+    "ApprovalRequest",
+    "ApprovalStatus",
+    "ApprovalType",
     "Appointment",
     "AppointmentStatus",
     "DayOfWeek",
@@ -55,6 +66,11 @@ __all__ = [
     "PractitionerAvailability",
     "PractitionerDepartment",
     "PractitionerType",
+    "Reminder",
+    "ReminderAttempt",
+    "ReminderAttemptStatus",
+    "ReminderStatus",
+    "ReminderType",
     "Role",
     "StepStatus",
     "User",

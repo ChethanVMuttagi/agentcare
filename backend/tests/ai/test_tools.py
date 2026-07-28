@@ -19,10 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.tools.appointment_tools import (
     BOOK_APPOINTMENT_TOOL,
     CHECK_AVAILABILITY_TOOL,
+    RESCHEDULE_APPOINTMENT_TOOL,
     build_default_registry,
 )
 from app.ai.tools.base import ToolCategory, ToolDefinition, ToolExecutionContext, ToolResultStatus
 from app.ai.tools.registry import ToolRegistry
+from app.models.appointment import Appointment, AppointmentStatus
 from app.models.department import Department
 from app.models.facility import Facility
 from app.models.membership import Role
@@ -38,6 +40,7 @@ MakeDepartment = Callable[..., Awaitable[Department]]
 MakePractitioner = Callable[..., Awaitable[Practitioner]]
 MakeAssignment = Callable[..., Awaitable[PractitionerDepartment]]
 MakePatient = Callable[..., Awaitable[Patient]]
+MakeAppointment = Callable[..., Awaitable[Appointment]]
 
 _FUTURE = datetime.now(UTC) + timedelta(days=30)
 
@@ -108,7 +111,23 @@ def test_registry_get_returns_none_for_unknown_tool() -> None:
 def test_registry_list_allowed_returns_all_registered_tools() -> None:
     registry = build_default_registry()
     names = {tool.name for tool in registry.list_allowed()}
-    assert names == {"check_availability", "book_appointment"}
+    assert names == {"check_availability", "book_appointment", "reschedule_appointment"}
+
+
+def test_full_tool_registry_includes_reschedule_appointment() -> None:
+    """Regression guard (STORY-015): `app.ai.tools.registry_builder.build_full_tool_registry`
+    — the registry the REAL application actually uses — must register
+    every tool a specialist's `allowed_tools` can name, independently of
+    `appointment_tools.build_default_registry`'s own (narrower-scoped,
+    test-only) registration list. `reschedule_appointment` was initially
+    added to the Scheduling agent's allowlist without also being added
+    here, which would have made it unreachable in production despite
+    passing every allowlist check."""
+    from app.ai.tools.registry_builder import build_full_tool_registry
+
+    registry = build_full_tool_registry()
+    names = {tool.name for tool in registry.list_allowed()}
+    assert "reschedule_appointment" in names
 
 
 def test_registry_rejects_duplicate_registration() -> None:
@@ -563,3 +582,243 @@ async def test_book_appointment_conflict_returns_safe_failure(
 def test_book_appointment_tool_definition_category() -> None:
     assert BOOK_APPOINTMENT_TOOL.category is ToolCategory.APPOINTMENT_BOOKING
     assert CHECK_AVAILABILITY_TOOL.category is ToolCategory.APPOINTMENT_AVAILABILITY
+
+
+# --- reschedule_appointment (STORY-015, real service/DB) ---
+
+
+async def test_reschedule_appointment_admin_succeeds_and_persists(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+    make_practitioner: MakePractitioner,
+    make_practitioner_department: MakeAssignment,
+    make_patient: MakePatient,
+    make_appointment: MakeAppointment,
+) -> None:
+    org, department, practitioner, patient = await _wide_open_scenario(
+        db_session,
+        make_organization,
+        make_facility,
+        make_department,
+        make_practitioner,
+        make_practitioner_department,
+        make_patient,
+        "tool-reschedule-admin",
+    )
+    appointment = await make_appointment(
+        org, patient, practitioner, department, start_at=_FUTURE, duration_minutes=30
+    )
+    registry = build_default_registry()
+    context = _context(
+        organization_id=org.id, user_id=uuid.uuid4(), role=Role.ADMIN, patient_id=None
+    )
+    new_start = _FUTURE + timedelta(hours=3)
+
+    result = await registry.execute(
+        "reschedule_appointment",
+        {
+            "appointment_id": str(appointment.id),
+            "start_at": new_start.isoformat(),
+            "duration_minutes": 45,
+        },
+        context,
+        db_session,
+    )
+
+    assert result.status is ToolResultStatus.SUCCESS
+    assert result.code == "appointment_rescheduled"
+    assert result.data is not None
+    assert result.data["appointment_id"] == str(appointment.id)
+
+    from app.repositories import appointment as appointment_repository
+
+    persisted = await appointment_repository.get_by_id(
+        db_session, organization_id=org.id, appointment_id=appointment.id
+    )
+    assert persisted is not None
+    assert persisted.start_at == new_start
+    assert persisted.status is AppointmentStatus.BOOKED
+
+
+async def test_reschedule_appointment_unknown_appointment_returns_safe_failure(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+    make_practitioner: MakePractitioner,
+    make_practitioner_department: MakeAssignment,
+    make_patient: MakePatient,
+) -> None:
+    org, _department, _practitioner, _patient = await _wide_open_scenario(
+        db_session,
+        make_organization,
+        make_facility,
+        make_department,
+        make_practitioner,
+        make_practitioner_department,
+        make_patient,
+        "tool-reschedule-unknown",
+    )
+    registry = build_default_registry()
+    context = _context(
+        organization_id=org.id, user_id=uuid.uuid4(), role=Role.ADMIN, patient_id=None
+    )
+
+    result = await registry.execute(
+        "reschedule_appointment",
+        {
+            "appointment_id": str(uuid.uuid4()),
+            "start_at": _FUTURE.isoformat(),
+            "duration_minutes": 30,
+        },
+        context,
+        db_session,
+    )
+
+    assert result.status is ToolResultStatus.FAILURE
+    assert result.code == "resource_not_found"
+
+
+async def test_reschedule_appointment_patient_role_uses_own_scope(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+    make_practitioner: MakePractitioner,
+    make_practitioner_department: MakeAssignment,
+    make_patient: MakePatient,
+    make_appointment: MakeAppointment,
+) -> None:
+    org, department, practitioner, patient = await _wide_open_scenario(
+        db_session,
+        make_organization,
+        make_facility,
+        make_department,
+        make_practitioner,
+        make_practitioner_department,
+        make_patient,
+        "tool-reschedule-patient-own",
+    )
+    appointment = await make_appointment(
+        org, patient, practitioner, department, start_at=_FUTURE, duration_minutes=30
+    )
+    registry = build_default_registry()
+    context = _context(
+        organization_id=org.id, user_id=uuid.uuid4(), role=Role.PATIENT, patient_id=patient.id
+    )
+    new_start = _FUTURE + timedelta(hours=5)
+
+    result = await registry.execute(
+        "reschedule_appointment",
+        {
+            "appointment_id": str(appointment.id),
+            "start_at": new_start.isoformat(),
+            "duration_minutes": 30,
+        },
+        context,
+        db_session,
+    )
+
+    assert result.status is ToolResultStatus.SUCCESS
+
+
+async def test_reschedule_appointment_patient_role_cannot_reschedule_anothers(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+    make_practitioner: MakePractitioner,
+    make_practitioner_department: MakeAssignment,
+    make_patient: MakePatient,
+    make_appointment: MakeAppointment,
+) -> None:
+    org, department, practitioner, other_patient = await _wide_open_scenario(
+        db_session,
+        make_organization,
+        make_facility,
+        make_department,
+        make_practitioner,
+        make_practitioner_department,
+        make_patient,
+        "tool-reschedule-patient-other",
+    )
+    appointment = await make_appointment(
+        org, other_patient, practitioner, department, start_at=_FUTURE, duration_minutes=30
+    )
+    caller_patient = await make_patient(org, "PN-tool-reschedule-patient-caller")
+    registry = build_default_registry()
+    context = _context(
+        organization_id=org.id,
+        user_id=uuid.uuid4(),
+        role=Role.PATIENT,
+        patient_id=caller_patient.id,
+    )
+
+    result = await registry.execute(
+        "reschedule_appointment",
+        {
+            "appointment_id": str(appointment.id),
+            "start_at": (_FUTURE + timedelta(hours=2)).isoformat(),
+            "duration_minutes": 30,
+        },
+        context,
+        db_session,
+    )
+
+    assert result.status is ToolResultStatus.FAILURE
+    assert result.code == "resource_not_found"
+
+
+async def test_reschedule_appointment_already_cancelled_is_rejected(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+    make_practitioner: MakePractitioner,
+    make_practitioner_department: MakeAssignment,
+    make_patient: MakePatient,
+    make_appointment: MakeAppointment,
+) -> None:
+    org, department, practitioner, patient = await _wide_open_scenario(
+        db_session,
+        make_organization,
+        make_facility,
+        make_department,
+        make_practitioner,
+        make_practitioner_department,
+        make_patient,
+        "tool-reschedule-cancelled",
+    )
+    appointment = await make_appointment(
+        org,
+        patient,
+        practitioner,
+        department,
+        start_at=_FUTURE,
+        duration_minutes=30,
+        status=AppointmentStatus.CANCELLED,
+    )
+    registry = build_default_registry()
+    context = _context(
+        organization_id=org.id, user_id=uuid.uuid4(), role=Role.ADMIN, patient_id=None
+    )
+
+    result = await registry.execute(
+        "reschedule_appointment",
+        {
+            "appointment_id": str(appointment.id),
+            "start_at": (_FUTURE + timedelta(hours=1)).isoformat(),
+            "duration_minutes": 30,
+        },
+        context,
+        db_session,
+    )
+
+    assert result.status is ToolResultStatus.FAILURE
+    assert result.code == "invalid_transition"
+
+
+def test_reschedule_appointment_tool_definition_category() -> None:
+    assert RESCHEDULE_APPOINTMENT_TOOL.category is ToolCategory.APPOINTMENT_BOOKING

@@ -89,6 +89,36 @@ class Settings(BaseSettings):
     # insurance, referral, consent scans); see docs/DOCUMENTS.md "File Size".
     document_max_upload_bytes: int = 10 * 1024 * 1024
 
+    # --- Reminder engine (STORY-013) -----------------------------------------------
+    # Disabled by default — the application (and every route/test that
+    # doesn't touch the reminder engine) must start with no background
+    # worker running at all, the same "optional at startup" posture
+    # already established for the LLM provider and document storage.
+    # See docs/adr/ADR-0012-reminder-engine.md "Worker Deployment".
+    reminder_worker_enabled: bool = False
+    reminder_worker_batch_size: int = 20
+    reminder_worker_poll_interval_seconds: float = 30.0
+    # A `PROCESSING` reminder whose lock is older than this is treated as
+    # abandoned (its worker crashed or was killed mid-attempt) and
+    # recovered by the next poll — see
+    # `app.repositories.reminder.acquire_pending`.
+    reminder_worker_lock_timeout_seconds: float = 300.0
+
+    @model_validator(mode="after")
+    def _validate_reminder_worker_bounds(self) -> Settings:
+        if self.reminder_worker_batch_size < 1:
+            raise ValueError("REMINDER_WORKER_BATCH_SIZE must be at least 1.")
+        if self.reminder_worker_poll_interval_seconds <= 0:
+            raise ValueError("REMINDER_WORKER_POLL_INTERVAL_SECONDS must be positive.")
+        if self.reminder_worker_lock_timeout_seconds <= 0:
+            raise ValueError("REMINDER_WORKER_LOCK_TIMEOUT_SECONDS must be positive.")
+        if self.reminder_worker_enabled and self.database_url is None:
+            raise ValueError(
+                "REMINDER_WORKER_ENABLED=true requires DATABASE_URL — the reminder "
+                "worker has no durable queue to poll without a real database."
+            )
+        return self
+
     @model_validator(mode="after")
     def _forbid_debug_in_production(self) -> Settings:
         if self.app_env is Environment.PRODUCTION and self.debug:

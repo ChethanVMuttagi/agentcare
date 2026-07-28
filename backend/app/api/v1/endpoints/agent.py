@@ -79,8 +79,12 @@ async def execute_administrative_request(
     """Interpret one administrative request via the Coordinator agent
     and, at most, hand off to one specialist that executes at most one
     tool. ADMIN/STAFF may act for any patient in the organization (or
-    none); PATIENT may act only for themselves. Always creates and
-    persists a `WorkflowRun` — see the module docstring."""
+    none); PATIENT may act only for themselves. Creates and persists a
+    new `WorkflowRun`, UNLESS `payload.workflow_run_id` is supplied, in
+    which case an existing, clarification-paused run is resumed instead
+    (STORY-015) — see
+    `app.ai.orchestration.AgentOrchestrationService.execute_administrative_request`.
+    """
     resolved_patient_id = await _resolve_request_patient_id(
         session,
         organization_id=organization_id,
@@ -99,6 +103,7 @@ async def execute_administrative_request(
         resolved_patient_id=resolved_patient_id,
         request_type=payload.request_type,
         request_text=payload.request_text,
+        workflow_run_id=payload.workflow_run_id,
     )
 
     return AgentExecuteResponse(
@@ -110,4 +115,5 @@ async def execute_administrative_request(
         tool_name=result.tool_name,
         tool_result_code=result.tool_result_code,
         tool_result_data=result.tool_result_data,
+        approval_id=result.approval_id,
     )

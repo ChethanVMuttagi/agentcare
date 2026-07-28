@@ -25,6 +25,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     String,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy import Enum as SqlEnum
@@ -108,6 +109,16 @@ class Appointment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "appointments"
     __table_args__ = (
+        # Added in STORY-013 — `app.models.reminder.Reminder` is the
+        # first model to reference `appointments` via a composite
+        # `(organization_id, appointment_id)` FK (the same tenant-safety
+        # technique `patients`/`workflow_runs`/`workflow_steps` already
+        # use), which requires PostgreSQL to have a unique constraint
+        # covering EXACTLY those two columns to reference. Purely
+        # additive and never fails on existing data: `id` alone is
+        # already the primary key (globally unique), so every
+        # `(organization_id, id)` pair is trivially already unique too.
+        UniqueConstraint("organization_id", "id", name="uq_appointments_organization_id_id"),
         CheckConstraint("start_at < end_at", name="start_before_end"),
         ForeignKeyConstraint(
             ["organization_id", "patient_id"],

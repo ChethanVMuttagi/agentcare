@@ -26,9 +26,11 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai.decisions import RefusalCategory
+from app.models.approval import ApprovalType
 
 _MESSAGE_MAX_LENGTH = 1000
 _TASK_CATEGORY_MAX_LENGTH = 100
+_REASON_MAX_LENGTH = 500
 
 
 class CoordinatorDecisionKind(StrEnum):
@@ -38,6 +40,13 @@ class CoordinatorDecisionKind(StrEnum):
     HANDOFF = "handoff"
     CLARIFICATION_REQUIRED = "clarification_required"
     REFUSAL = "refusal"
+    REQUIRES_APPROVAL = "requires_approval"
+    """STORY-014: the Coordinator has determined this request needs a
+    human decision before it can proceed (e.g. low confidence, an
+    ambiguous policy-restricted action, or missing information it
+    should not guess at) — "instead of hallucinating, request approval".
+    See `CoordinatorRequiresApprovalDecision` and
+    `app.services.approval.ApprovalService`."""
 
 
 class TargetAgent(StrEnum):
@@ -97,8 +106,37 @@ class CoordinatorRefusalDecision(BaseModel):
     safe_message: str = Field(min_length=1, max_length=_MESSAGE_MAX_LENGTH)
 
 
+class CoordinatorRequiresApprovalDecision(BaseModel):
+    """The Coordinator has determined this request needs a human
+    decision before it can proceed, rather than being handed to a
+    specialist, answered directly, or refused outright — e.g. low
+    confidence, an ambiguous or policy-restricted action, or missing
+    information the Coordinator should not guess at (STORY-014:
+    "instead of hallucinating, request approval").
+
+    `reason` is a short, bounded, safe explanation of WHY approval is
+    needed — never the model's full internal reasoning, and never
+    free-form patient-identifying text. `approval_type` reuses
+    `app.models.approval.ApprovalType` directly (the same canonical enum
+    persisted on `ApprovalRequest`) rather than an independently defined
+    mirror — an approval type must always mean exactly the same thing
+    whether it came from the database or from the Coordinator.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal[CoordinatorDecisionKind.REQUIRES_APPROVAL] = (
+        CoordinatorDecisionKind.REQUIRES_APPROVAL
+    )
+    approval_type: ApprovalType
+    reason: str = Field(min_length=1, max_length=_REASON_MAX_LENGTH)
+
+
 CoordinatorDecision = Annotated[
-    HandoffDecision | CoordinatorClarificationRequiredDecision | CoordinatorRefusalDecision,
+    HandoffDecision
+    | CoordinatorClarificationRequiredDecision
+    | CoordinatorRefusalDecision
+    | CoordinatorRequiresApprovalDecision,
     Field(discriminator="kind"),
 ]
 

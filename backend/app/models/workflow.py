@@ -83,6 +83,23 @@ class WorkflowRequestType(StrEnum):
     DOCUMENT_COLLECTION = "document_collection"
     ADMINISTRATIVE_ROUTING = "administrative_routing"
     FOLLOW_UP = "follow_up"
+    REMINDER_DELIVERY = "reminder_delivery"
+    """STORY-013: one reminder's own scheduled -> started -> sent/failed/
+    cancelled lifecycle — see `app.services.reminder.ReminderService` and
+    docs/adr/ADR-0012-reminder-engine.md. Every `Reminder` row owns
+    exactly one `WorkflowRun` of this type (`Reminder.workflow_run_id`,
+    NOT NULL)."""
+
+    PATIENT_REGISTRATION = "patient_registration"
+    """STORY-015: the Patient Registration workflow template — see
+    `app.services.patient_registration.PatientRegistrationService` and
+    docs/adr/ADR-0014-end-to-end-administrative-workflows.md. Unlike
+    every other `WorkflowRequestType`, a run of this type is never
+    created with a `patient_id` (the patient does not exist yet at
+    workflow start) — `WorkflowRun.patient_id` stays `NULL` for its
+    entire lifetime, which is correct, not a gap: this workflow kind is
+    inherently an ADMIN/STAFF-only administrative action, never a
+    `PATIENT`-role self-service one."""
 
 
 class WorkflowStatus(StrEnum):
@@ -146,6 +163,30 @@ class WorkflowEventType(StrEnum):
     `app.services.workflow.WorkflowService.record_agent_handoff`) — never
     the Coordinator's reasoning for the choice, and never any free-form
     text.
+
+    `REMINDER_SCHEDULED`/`REMINDER_STARTED`/`REMINDER_SENT`/
+    `REMINDER_FAILED`/`REMINDER_CANCELLED` (STORY-013) are the reminder-
+    engine counterpart: recorded on a `Reminder`'s OWN `WorkflowRun`
+    (`request_type=reminder_delivery`) at each meaningful lifecycle
+    moment — see `app.services.workflow.WorkflowService.record_reminder_event`
+    and docs/adr/ADR-0012-reminder-engine.md. `safe_metadata` carries
+    only bounded, safe fields (reminder id, attempt number, safe result/
+    failure code) — never notification content, contact details, or any
+    other PHI.
+
+    `STEP_WAITING`/`STEP_RESUMED` (STORY-014) are the STEP-level analogs
+    of `WORKFLOW_WAITING`/`WORKFLOW_RESUMED` — recorded by
+    `WorkflowService.mark_step_waiting`/`resume_step` when one step (not
+    the whole run) pauses for/resumes from human review, mirroring the
+    existing `STEP_STARTED`/`WORKFLOW_STARTED` separate-value pattern.
+
+    `APPROVAL_REQUESTED`/`APPROVAL_GRANTED`/`APPROVAL_REJECTED`
+    (STORY-014) are the human-in-the-loop approval counterpart: recorded
+    on the step an `ApprovalRequest` pauses (see
+    `app.services.workflow.WorkflowService.record_approval_event` and
+    `app.services.approval.ApprovalService`) — `safe_metadata` carries
+    only bounded, safe fields (approval id, approval type) — never the
+    Coordinator's reasoning or any free-form text.
     """
 
     WORKFLOW_CREATED = "workflow_created"
@@ -153,9 +194,19 @@ class WorkflowEventType(StrEnum):
     STEP_STARTED = "step_started"
     TOOL_INVOKED = "tool_invoked"
     AGENT_HANDOFF = "agent_handoff"
+    REMINDER_SCHEDULED = "reminder_scheduled"
+    REMINDER_STARTED = "reminder_started"
+    REMINDER_SENT = "reminder_sent"
+    REMINDER_FAILED = "reminder_failed"
+    REMINDER_CANCELLED = "reminder_cancelled"
     STEP_COMPLETED = "step_completed"
     STEP_FAILED = "step_failed"
     STEP_SKIPPED = "step_skipped"
+    STEP_WAITING = "step_waiting"
+    STEP_RESUMED = "step_resumed"
+    APPROVAL_REQUESTED = "approval_requested"
+    APPROVAL_GRANTED = "approval_granted"
+    APPROVAL_REJECTED = "approval_rejected"
     WORKFLOW_WAITING = "workflow_waiting"
     WORKFLOW_RESUMED = "workflow_resumed"
     WORKFLOW_COMPLETED = "workflow_completed"

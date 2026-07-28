@@ -47,6 +47,13 @@ class Role(StrEnum):
     """Patient-facing access — will be constrained to the patient's own
     records/workflows once a `Patient` entity exists to constrain it to."""
 
+    SUPERVISOR = "supervisor"
+    """STORY-014: authorized, alongside `ADMIN`, to approve or reject a
+    paused `ApprovalRequest` (see `app.models.approval`) — a narrower
+    grant than `ADMIN`'s full organization-level access, for an
+    organization that wants a dedicated human-in-the-loop reviewer role
+    without granting full administrative rights."""
+
 
 class OrganizationMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Associates one User with one Organization, with a Role.

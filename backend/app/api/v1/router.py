@@ -2,7 +2,9 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     agent,
+    analytics,
     appointments,
+    approvals,
     auth,
     departments,
     documents,
@@ -22,3 +24,5 @@ api_router.include_router(appointments.router, tags=["appointments"])
 api_router.include_router(documents.router, tags=["documents"])
 api_router.include_router(workflows.router, tags=["workflows"])
 api_router.include_router(agent.router, tags=["agent"])
+api_router.include_router(approvals.router, tags=["approvals"])
+api_router.include_router(analytics.router, tags=["analytics"])

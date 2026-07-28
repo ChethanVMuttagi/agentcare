@@ -932,6 +932,7 @@ async def test_response_never_contains_prompt_or_reasoning_fields(
         "tool_name",
         "tool_result_code",
         "tool_result_data",
+        "approval_id",
     }
     assert set(body.keys()) == expected_keys
     assert body["handled_by_agent"] == "coordinator"

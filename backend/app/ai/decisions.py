@@ -48,6 +48,13 @@ class DecisionKind(StrEnum):
     CLARIFICATION_REQUIRED = "clarification_required"
     SAFE_RESPONSE = "safe_response"
     REFUSAL = "refusal"
+    REQUIRES_APPROVAL = "requires_approval"
+    """STORY-014: NOT a variant of `AdministrativeDecision` (only the
+    Coordinator's own `app.ai.coordinator_decisions.CoordinatorDecision`
+    can express this — see `CoordinatorRequiresApprovalDecision`). Exists
+    on this shared enum purely so `app.ai.orchestration.AgentExecutionResult.decision_kind`
+    has a value to report when a request pauses for human approval,
+    exactly like every other outward-facing decision kind."""
 
 
 class RefusalCategory(StrEnum):

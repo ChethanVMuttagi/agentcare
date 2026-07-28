@@ -27,6 +27,7 @@ scheduling conflict.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -45,6 +46,9 @@ from app.services.availability_query import (
     MIN_APPOINTMENT_DURATION_MINUTES,
     AvailabilityQueryService,
 )
+from app.services.reminder_scheduler import ReminderScheduler
+
+logger = logging.getLogger("agentcare.services.appointment")
 
 # PostgreSQL's SQLSTATE for "exclusion_violation" — the ONLY way an
 # `IntegrityError` can carry this code is a violated `EXCLUDE` constraint,
@@ -174,11 +178,86 @@ def _translate_integrity_error(exc: IntegrityError) -> AppointmentConflictError 
 
 
 class AppointmentService:
-    """Appointment booking/rescheduling/cancellation, scoped to one `AsyncSession`."""
+    """Appointment booking/rescheduling/cancellation, scoped to one `AsyncSession`.
+
+    ## Automatic Reminder Scheduling (STORY-013)
+
+    `book_appointment`/`reschedule_appointment`/`cancel_appointment` each
+    accept an OPTIONAL `initiated_by_user_id`. When given, the
+    appointment mutation's own commit is followed by a SEPARATE,
+    independently-committed call into `ReminderScheduler` — the same
+    multi-step-with-independent-commits pattern
+    `app.ai.orchestration.AgentOrchestrationService` already established
+    for a sequence of durable steps, not one large cross-service
+    transaction (see docs/adr/ADR-0012-reminder-engine.md "Atomicity").
+    When omitted (the default — every pre-STORY-013 caller/test), NO
+    reminder is scheduled/cancelled at all: this keeps every existing
+    call site's behavior completely unchanged. The real product surface
+    (`app.api.v1.endpoints.appointments`, `app.ai.tools.appointment_tools`)
+    ALWAYS supplies it — see those modules.
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._availability = AvailabilityQueryService(session)
+        self._reminder_scheduler = ReminderScheduler(session)
+
+    async def _schedule_reminder_best_effort(
+        self, appointment: Appointment, *, initiated_by_user_id: uuid.UUID
+    ) -> None:
+        """The appointment mutation ABOVE this call already committed —
+        it genuinely succeeded. A reminder-scheduling failure must never
+        make a genuinely successful booking/reschedule APPEAR to have
+        failed to a caller. Logged, never raised — mirrors
+        `app.ai.tools.registry.ToolRegistry.execute`'s identical
+        "never let a downstream failure corrupt an already-true result"
+        philosophy.
+
+        `AppException` (a controlled business-rule rejection — e.g. the
+        initiator's membership is no longer active — always raised
+        BEFORE any flush anywhere in `ReminderService`/`WorkflowService`)
+        needs no rollback: the session is already clean. Any OTHER
+        exception is treated as a genuine, unexpected DB-level failure
+        that MAY have left a flushed-but-uncommitted change behind, so
+        `self._session` is rolled back to remain usable for whatever the
+        caller does next.
+        """
+        try:
+            await self._reminder_scheduler.schedule_appointment_reminder(
+                appointment, initiated_by_user_id=initiated_by_user_id
+            )
+        except AppException:
+            logger.exception(
+                "failed to schedule reminder for appointment %s; appointment itself is unaffected",
+                appointment.id,
+            )
+        except Exception:
+            await self._session.rollback()
+            logger.exception(
+                "failed to schedule reminder for appointment %s; appointment itself is unaffected",
+                appointment.id,
+            )
+
+    async def _cancel_reminders_best_effort(
+        self, appointment: Appointment, *, initiated_by_user_id: uuid.UUID
+    ) -> None:
+        """Same reasoning as `_schedule_reminder_best_effort`, for the
+        cancellation side."""
+        try:
+            await self._reminder_scheduler.cancel_appointment_reminders(
+                appointment, initiated_by_user_id=initiated_by_user_id
+            )
+        except AppException:
+            logger.exception(
+                "failed to cancel reminders for appointment %s; appointment itself is unaffected",
+                appointment.id,
+            )
+        except Exception:
+            await self._session.rollback()
+            logger.exception(
+                "failed to cancel reminders for appointment %s; appointment itself is unaffected",
+                appointment.id,
+            )
 
     async def _ensure_bookable(
         self,
@@ -258,10 +337,15 @@ class AppointmentService:
         department_id: uuid.UUID,
         start_at: datetime,
         duration_minutes: int,
+        initiated_by_user_id: uuid.UUID | None = None,
     ) -> Appointment:
         """Book a new appointment, committing only once every check passes
         AND the database has confirmed no collision. See the module
         docstring for why there is no pre-check select before the insert.
+
+        `initiated_by_user_id`: see the class docstring "Automatic
+        Reminder Scheduling" — when given, a `Reminder` is scheduled for
+        this appointment immediately after it is durably booked.
         """
         _validate_duration(duration_minutes)
         end_at = start_at + timedelta(minutes=duration_minutes)
@@ -293,6 +377,11 @@ class AppointmentService:
             raise conflict from exc
 
         await self._session.commit()
+
+        if initiated_by_user_id is not None:
+            await self._schedule_reminder_best_effort(
+                appointment, initiated_by_user_id=initiated_by_user_id
+            )
         return appointment
 
     async def get_appointment(
@@ -367,6 +456,7 @@ class AppointmentService:
         start_at: datetime,
         duration_minutes: int,
         patient_id: uuid.UUID | None = None,
+        initiated_by_user_id: uuid.UUID | None = None,
     ) -> Appointment:
         """Move an existing `booked` appointment to a new time, in place —
         deliberately NOT cancel-old-plus-create-new (see
@@ -385,6 +475,12 @@ class AppointmentService:
         `AppointmentConflictError` is raised — the ORIGINAL appointment
         row is left completely unchanged in the database, because the
         failed `UPDATE` was never committed.
+
+        `initiated_by_user_id`: see the class docstring "Automatic
+        Reminder Scheduling" — when given, every still-cancellable
+        reminder for the OLD time is cancelled, and a fresh one is
+        scheduled for the NEW time (never left pointing at a stale
+        `start_at`).
         """
         appointment = await self.get_appointment(
             organization_id=organization_id,
@@ -419,6 +515,14 @@ class AppointmentService:
             raise conflict from exc
 
         await self._session.commit()
+
+        if initiated_by_user_id is not None:
+            await self._cancel_reminders_best_effort(
+                appointment, initiated_by_user_id=initiated_by_user_id
+            )
+            await self._schedule_reminder_best_effort(
+                appointment, initiated_by_user_id=initiated_by_user_id
+            )
         return appointment
 
     async def cancel_appointment(
@@ -428,6 +532,7 @@ class AppointmentService:
         appointment_id: uuid.UUID,
         cancellation_reason: str | None = None,
         patient_id: uuid.UUID | None = None,
+        initiated_by_user_id: uuid.UUID | None = None,
     ) -> Appointment:
         """`booked` -> `cancelled`.
 
@@ -442,6 +547,10 @@ class AppointmentService:
         never violate either EXCLUDE constraint (both apply only `WHERE
         status = 'booked'`), so no `IntegrityError` handling is needed
         here.
+
+        `initiated_by_user_id`: see the class docstring "Automatic
+        Reminder Scheduling" — when given, every still-cancellable
+        reminder for this appointment is cancelled too.
         """
         appointment = await self.get_appointment(
             organization_id=organization_id,
@@ -455,4 +564,9 @@ class AppointmentService:
         appointment.cancellation_reason = cancellation_reason
         await self._session.flush()
         await self._session.commit()
+
+        if initiated_by_user_id is not None:
+            await self._cancel_reminders_best_effort(
+                appointment, initiated_by_user_id=initiated_by_user_id
+            )
         return appointment

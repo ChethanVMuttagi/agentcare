@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment import Appointment, AppointmentStatus
@@ -107,6 +107,20 @@ async def list_practitioner_appointments_in_range(
         )
     )
     return result.scalars().all()
+
+
+async def count_by_status(
+    session: AsyncSession, *, organization_id: uuid.UUID
+) -> dict[AppointmentStatus, int]:
+    """Organization-wide appointment counts grouped by `status` — the
+    appointments breakdown for the Milestone B analytics summary
+    (`app.api.v1.endpoints.analytics`)."""
+    result = await session.execute(
+        select(Appointment.status, func.count())
+        .where(Appointment.organization_id == organization_id)
+        .group_by(Appointment.status)
+    )
+    return {status: count for status, count in result.all()}
 
 
 async def create(session: AsyncSession, appointment: Appointment) -> Appointment:

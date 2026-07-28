@@ -16,10 +16,10 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.workflow import WorkflowRun
+from app.models.workflow import WorkflowRequestType, WorkflowRun, WorkflowStatus
 
 
 async def get_by_id(
@@ -45,6 +45,18 @@ async def get_by_id_for_update(
     now-current (possibly already-transitioned) status — this is what
     lets `WorkflowService` detect and reject a lost transition race
     deterministically rather than silently double-applying it.
+
+    `populate_existing=True` is required, not cosmetic: if this session
+    already loaded this exact `WorkflowRun` earlier (e.g. an unlocked
+    precondition read before this locked one), SQLAlchemy's identity map
+    returns that SAME Python object by default and does NOT overwrite
+    its already-populated attributes from this query's result — so
+    `.status` would silently keep reflecting the value seen before this
+    call blocked on the lock, even though the ROW itself was correctly
+    locked and the query genuinely waited. `populate_existing=True`
+    forces this query's result to overwrite the object's attributes,
+    which is the entire point of a "for update" read: the caller must
+    see the CURRENT, contention-safe state, never a stale cached one.
     """
     result = await session.execute(
         select(WorkflowRun)
@@ -53,6 +65,7 @@ async def get_by_id_for_update(
             WorkflowRun.id == workflow_run_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
 
@@ -77,6 +90,34 @@ async def list_by_organization(
         stmt.order_by(WorkflowRun.created_at.desc(), WorkflowRun.id).limit(limit).offset(offset)
     )
     return result.scalars().all()
+
+
+async def count_by_status(
+    session: AsyncSession, *, organization_id: uuid.UUID
+) -> dict[WorkflowStatus, int]:
+    """Organization-wide run counts grouped by `status` — the workflows
+    breakdown for the Milestone B analytics summary
+    (`app.api.v1.endpoints.analytics`). Statuses with zero runs are
+    simply absent from the returned mapping."""
+    result = await session.execute(
+        select(WorkflowRun.status, func.count())
+        .where(WorkflowRun.organization_id == organization_id)
+        .group_by(WorkflowRun.status)
+    )
+    return {status: count for status, count in result.all()}
+
+
+async def count_by_request_type(
+    session: AsyncSession, *, organization_id: uuid.UUID
+) -> dict[WorkflowRequestType, int]:
+    """Organization-wide run counts grouped by `request_type` — the
+    analytics summary's request-type breakdown."""
+    result = await session.execute(
+        select(WorkflowRun.request_type, func.count())
+        .where(WorkflowRun.organization_id == organization_id)
+        .group_by(WorkflowRun.request_type)
+    )
+    return {request_type: count for request_type, count in result.all()}
 
 
 async def create(session: AsyncSession, run: WorkflowRun) -> WorkflowRun:

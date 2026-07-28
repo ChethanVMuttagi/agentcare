@@ -28,6 +28,7 @@ from app.auth.security import hash_password
 from app.db.session import get_db_session
 from app.main import create_app
 from app.models.appointment import Appointment, AppointmentStatus
+from app.models.approval import ApprovalRequest, ApprovalStatus, ApprovalType
 from app.models.department import Department
 from app.models.facility import Facility, FacilityType
 from app.models.membership import OrganizationMembership, Role
@@ -42,6 +43,13 @@ from app.models.patient_document import (
 from app.models.practitioner import Practitioner, PractitionerType
 from app.models.practitioner_availability import DayOfWeek, PractitionerAvailability
 from app.models.practitioner_department import PractitionerDepartment
+from app.models.reminder import (
+    Reminder,
+    ReminderAttempt,
+    ReminderAttemptStatus,
+    ReminderStatus,
+    ReminderType,
+)
 from app.models.user import User
 from app.models.workflow import (
     ActorType,
@@ -647,5 +655,152 @@ def make_workflow_event(
         db_session.add(event)
         await db_session.flush()
         return event
+
+    return _make
+
+
+@pytest.fixture()
+def make_reminder(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[Reminder]]:
+    """Factory for a synthetic, flushed (never committed) `Reminder`.
+
+    Does NOT validate lifecycle-transition rules itself (that is
+    `app.services.reminder.ReminderService`'s job) — this is a raw
+    factory for model-level/repository-level test setup. The caller is
+    responsible for `workflow_run`/`workflow_step` referencing a REAL
+    run/step in the SAME `organization` (the composite FKs require it —
+    see `app/models/reminder.py`).
+    """
+
+    async def _make(
+        organization: Organization,
+        appointment: Appointment,
+        patient: Patient,
+        workflow_run: WorkflowRun,
+        workflow_step: WorkflowStep,
+        *,
+        reminder_type: ReminderType = ReminderType.APPOINTMENT_REMINDER,
+        scheduled_at: datetime | None = None,
+        status: ReminderStatus = ReminderStatus.PENDING,
+        payload: dict[str, object] | None = None,
+        attempt_count: int = 0,
+        max_attempts: int = 5,
+        locked_at: datetime | None = None,
+        locked_by: str | None = None,
+        last_error: str | None = None,
+        sent_at: datetime | None = None,
+        cancelled_at: datetime | None = None,
+    ) -> Reminder:
+        reminder = Reminder(
+            organization_id=organization.id,
+            appointment_id=appointment.id,
+            patient_id=patient.id,
+            workflow_run_id=workflow_run.id,
+            workflow_step_id=workflow_step.id,
+            reminder_type=reminder_type,
+            scheduled_at=scheduled_at or (datetime.now(UTC) + timedelta(days=1)),
+            status=status,
+            payload=payload,
+            attempt_count=attempt_count,
+            max_attempts=max_attempts,
+            locked_at=locked_at,
+            locked_by=locked_by,
+            last_error=last_error,
+            sent_at=sent_at,
+            cancelled_at=cancelled_at,
+        )
+        db_session.add(reminder)
+        await db_session.flush()
+        return reminder
+
+    return _make
+
+
+@pytest.fixture()
+def make_reminder_attempt(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[ReminderAttempt]]:
+    """Factory for a synthetic, flushed (never committed) `ReminderAttempt`.
+
+    Append-only in production (see `app.repositories.reminder_attempt`);
+    this raw factory exists only for model-level/repository-level test
+    setup.
+    """
+
+    async def _make(
+        organization: Organization,
+        reminder: Reminder,
+        *,
+        attempt_number: int = 1,
+        status: ReminderAttemptStatus = ReminderAttemptStatus.SENT,
+        provider_name: str = "synthetic-provider",
+        safe_error_message: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> ReminderAttempt:
+        now = datetime.now(UTC)
+        attempt = ReminderAttempt(
+            organization_id=organization.id,
+            reminder_id=reminder.id,
+            attempt_number=attempt_number,
+            status=status,
+            provider_name=provider_name,
+            safe_error_message=safe_error_message,
+            started_at=started_at or now,
+            completed_at=completed_at or now,
+        )
+        db_session.add(attempt)
+        await db_session.flush()
+        return attempt
+
+    return _make
+
+
+@pytest.fixture()
+def make_approval_request(
+    db_session: AsyncSession,
+) -> Callable[..., Awaitable[ApprovalRequest]]:
+    """Factory for a synthetic, flushed (never committed) `ApprovalRequest`.
+
+    Does NOT validate lifecycle-transition rules, or pause the
+    referenced step/run, itself (that is
+    `app.services.approval.ApprovalService`'s job) — this is a raw
+    factory for model-level/repository-level test setup. The caller is
+    responsible for `workflow_run`/`workflow_step` referencing a REAL
+    run/step in the SAME `organization` (the composite FKs require it —
+    see `app/models/approval.py`).
+    """
+
+    async def _make(
+        organization: Organization,
+        workflow_run: WorkflowRun,
+        workflow_step: WorkflowStep,
+        *,
+        approval_type: ApprovalType = ApprovalType.HIGH_RISK_ACTION,
+        status: ApprovalStatus = ApprovalStatus.PENDING,
+        reason: str = "Synthetic test approval reason.",
+        requested_by_agent: str = "coordinator",
+        approved_by_user: uuid.UUID | None = None,
+        approved_at: datetime | None = None,
+        rejected_at: datetime | None = None,
+        expires_at: datetime | None = None,
+    ) -> ApprovalRequest:
+        approval = ApprovalRequest(
+            organization_id=organization.id,
+            workflow_run_id=workflow_run.id,
+            workflow_step_id=workflow_step.id,
+            approval_type=approval_type,
+            status=status,
+            reason=reason,
+            requested_by_agent=requested_by_agent,
+            approved_by_user=approved_by_user,
+            approved_at=approved_at,
+            rejected_at=rejected_at,
+            expires_at=expires_at or (datetime.now(UTC) + timedelta(hours=24)),
+        )
+        db_session.add(approval)
+        await db_session.flush()
+        return approval
 
     return _make

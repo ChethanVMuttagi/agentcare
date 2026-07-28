@@ -80,8 +80,10 @@ def test_coordinator_has_no_tool_allowlist_at_all() -> None:
     assert COORDINATOR_AGENT.role is AgentRole.COORDINATOR
 
 
-def test_scheduling_agent_tool_allowlist_is_exactly_the_two_appointment_tools() -> None:
-    assert SCHEDULING_AGENT.allowed_tools == frozenset({"check_availability", "book_appointment"})
+def test_scheduling_agent_tool_allowlist_is_exactly_the_three_appointment_tools() -> None:
+    assert SCHEDULING_AGENT.allowed_tools == frozenset(
+        {"check_availability", "book_appointment", "reschedule_appointment"}
+    )
 
 
 def test_document_agent_tool_allowlist_is_exactly_one_read_only_tool() -> None:

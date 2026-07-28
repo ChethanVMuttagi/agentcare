@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -7,15 +9,44 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
-from app.db.session import dispose_engine
+from app.db.session import dispose_engine, get_sessionmaker
+from app.notifications.console import ConsoleNotificationProvider
+from app.workers.reminder_worker import ReminderWorker
+
+logger = logging.getLogger("agentcare.main")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Application lifespan: no startup work yet, but resources created on
-    demand during the app's lifetime (currently: the database engine) must
-    be disposed cleanly on shutdown."""
+    """Application lifespan.
+
+    STORY-013: when `REMINDER_WORKER_ENABLED=true` (never true by
+    default — see `app.core.config.Settings`), starts
+    `ReminderWorker.run_forever()` as a background task, stopping it
+    cleanly on shutdown via `asyncio.Event` (never `task.cancel()` mid-
+    database-write — the worker's own poll loop checks the event between
+    cycles). Disabled, this block never touches the database at all,
+    matching every route that doesn't need one.
+    """
+    settings = get_settings()
+    stop_event = asyncio.Event()
+    worker_task: asyncio.Task[None] | None = None
+
+    if settings.reminder_worker_enabled:
+        worker = ReminderWorker(
+            get_sessionmaker(),
+            ConsoleNotificationProvider(),
+            batch_size=settings.reminder_worker_batch_size,
+            poll_interval_seconds=settings.reminder_worker_poll_interval_seconds,
+        )
+        logger.info("starting reminder worker %s", worker.worker_id)
+        worker_task = asyncio.create_task(worker.run_forever(stop_event=stop_event))
+
     yield
+
+    stop_event.set()
+    if worker_task is not None:
+        await worker_task
     await dispose_engine()
 
 

@@ -312,12 +312,15 @@ async def test_failed_tool_call_after_handoff_persists_failed_workflow_and_step(
 # --- Coordinator-only outcomes (no handoff, no specialist step) ---
 
 
-async def test_coordinator_clarification_completes_without_handoff(
+async def test_coordinator_clarification_pauses_the_workflow_without_handoff(
     db_session: AsyncSession,
     make_organization: MakeOrganization,
     make_user: MakeUser,
     make_membership: MakeMembership,
 ) -> None:
+    """STORY-015: a clarification PAUSES the run (`WAITING`) rather than
+    completing it — see `test_orchestration_resume.py` for the
+    follow-up-resumes-the-same-run proof."""
     org, admin = await _org_with_admin(
         make_organization, make_user, make_membership, "orch-coord-clarify"
     )
@@ -338,7 +341,7 @@ async def test_coordinator_clarification_completes_without_handoff(
     )
 
     assert result.decision_kind is DecisionKind.CLARIFICATION_REQUIRED
-    assert result.workflow_status is WorkflowStatus.COMPLETED
+    assert result.workflow_status is WorkflowStatus.WAITING
     assert result.handled_by_agent == "coordinator"
     assert result.tool_name is None
     assert len(provider.calls) == 0, "no specialist should ever have been invoked"
@@ -351,8 +354,8 @@ async def test_coordinator_clarification_completes_without_handoff(
         "workflow_created",
         "workflow_started",
         "step_started",
-        "step_completed",
-        "workflow_completed",
+        "step_waiting",
+        "workflow_waiting",
     ]
     steps = await workflow_step_repository.list_by_run(
         db_session, organization_id=org.id, workflow_run_id=result.workflow_run_id

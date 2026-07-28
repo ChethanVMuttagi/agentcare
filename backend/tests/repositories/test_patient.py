@@ -176,4 +176,86 @@ async def test_create_adds_and_flushes_without_committing(
     result = await patient_repository.get_by_id(
         db_session, organization_id=org.id, patient_id=patient.id
     )
+    assert result is None  # never committed
+
+
+# --- find_by_name_and_dob (STORY-015) ---
+
+
+async def test_find_by_name_and_dob_returns_exact_match(
+    db_session: AsyncSession, make_organization: MakeOrganization, make_patient: MakePatient
+) -> None:
+    org = await make_organization("repo-find-dob-match")
+    patient = await make_patient(
+        org, "PN-REPO-DOB-1", first_name="Jamie", last_name="Rivera", date_of_birth=date(1985, 6, 1)
+    )
+
+    result = await patient_repository.find_by_name_and_dob(
+        db_session,
+        organization_id=org.id,
+        first_name="Jamie",
+        last_name="Rivera",
+        date_of_birth=date(1985, 6, 1),
+    )
+    assert result is not None
+    assert result.id == patient.id
+
+
+async def test_find_by_name_and_dob_is_case_insensitive(
+    db_session: AsyncSession, make_organization: MakeOrganization, make_patient: MakePatient
+) -> None:
+    org = await make_organization("repo-find-dob-case")
+    patient = await make_patient(
+        org, "PN-REPO-DOB-2", first_name="Jamie", last_name="Rivera", date_of_birth=date(1985, 6, 1)
+    )
+
+    result = await patient_repository.find_by_name_and_dob(
+        db_session,
+        organization_id=org.id,
+        first_name="JAMIE",
+        last_name="rivera",
+        date_of_birth=date(1985, 6, 1),
+    )
+    assert result is not None
+    assert result.id == patient.id
+
+
+async def test_find_by_name_and_dob_returns_none_when_dob_differs(
+    db_session: AsyncSession, make_organization: MakeOrganization, make_patient: MakePatient
+) -> None:
+    org = await make_organization("repo-find-dob-differ")
+    await make_patient(
+        org, "PN-REPO-DOB-3", first_name="Jamie", last_name="Rivera", date_of_birth=date(1985, 6, 1)
+    )
+
+    result = await patient_repository.find_by_name_and_dob(
+        db_session,
+        organization_id=org.id,
+        first_name="Jamie",
+        last_name="Rivera",
+        date_of_birth=date(1990, 1, 1),
+    )
+    assert result is None
+
+
+async def test_find_by_name_and_dob_is_tenant_scoped(
+    db_session: AsyncSession, make_organization: MakeOrganization, make_patient: MakePatient
+) -> None:
+    org_a = await make_organization("repo-find-dob-tenant-a")
+    org_b = await make_organization("repo-find-dob-tenant-b")
+    await make_patient(
+        org_a,
+        "PN-REPO-DOB-4",
+        first_name="Jamie",
+        last_name="Rivera",
+        date_of_birth=date(1985, 6, 1),
+    )
+
+    result = await patient_repository.find_by_name_and_dob(
+        db_session,
+        organization_id=org_b.id,
+        first_name="Jamie",
+        last_name="Rivera",
+        date_of_birth=date(1985, 6, 1),
+    )
     assert result is None

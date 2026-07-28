@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.patient import Patient
@@ -66,6 +67,45 @@ async def get_by_patient_number(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def find_by_name_and_dob(
+    session: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    first_name: str,
+    last_name: str,
+    date_of_birth: date,
+) -> Patient | None:
+    """STORY-015: best-effort SOFT-duplicate detection for
+    `app.services.patient_registration.PatientRegistrationService` — a
+    plain, case-insensitive exact match on first name, last name, and
+    date of birth, never a fuzzy/approximate match. This is a HEURISTIC
+    used to trigger human review (see `ApprovalType.CUSTOM` in
+    `app.workflows.templates.PATIENT_REGISTRATION_TEMPLATE`), not a
+    definitive identity resolution — a genuine hard conflict (the same
+    `patient_number`) is handled separately by `get_by_patient_number`.
+    Returns the oldest match if more than one exists (extremely rare)."""
+    result = await session.execute(
+        select(Patient)
+        .where(
+            Patient.organization_id == organization_id,
+            func.lower(Patient.first_name) == first_name.lower(),
+            func.lower(Patient.last_name) == last_name.lower(),
+            Patient.date_of_birth == date_of_birth,
+        )
+        .order_by(Patient.created_at, Patient.id)
+    )
+    return result.scalars().first()
+
+
+async def count(session: AsyncSession, *, organization_id: uuid.UUID) -> int:
+    """Total patient count for `organization_id` — the patients total
+    for the Milestone B analytics summary (`app.api.v1.endpoints.analytics`)."""
+    result = await session.execute(
+        select(func.count()).select_from(Patient).where(Patient.organization_id == organization_id)
+    )
+    return result.scalar_one()
 
 
 async def list_by_organization(

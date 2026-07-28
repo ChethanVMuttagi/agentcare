@@ -45,9 +45,9 @@ COORDINATOR_AGENT = AgentDefinition(
 SCHEDULING_AGENT = AgentDefinition(
     name="scheduling",
     role=AgentRole.SCHEDULING,
-    description="Checks appointment availability and books appointments.",
+    description="Checks appointment availability, books, and reschedules appointments.",
     system_prompt=SCHEDULING_SYSTEM_PROMPT,
-    allowed_tools=frozenset({"check_availability", "book_appointment"}),
+    allowed_tools=frozenset({"check_availability", "book_appointment", "reschedule_appointment"}),
 )
 
 DOCUMENT_AGENT = AgentDefinition(

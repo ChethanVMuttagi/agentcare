@@ -63,8 +63,28 @@ from app.repositories import workflow_event as workflow_event_repository
 from app.repositories import workflow_run as workflow_run_repository
 from app.repositories import workflow_step as workflow_step_repository
 
-_TERMINAL_RUN_STATUSES = frozenset(
+TERMINAL_RUN_STATUSES = frozenset(
     {WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED}
+)
+
+# The closed set `record_reminder_event` accepts — see that method.
+_REMINDER_EVENT_TYPES = frozenset(
+    {
+        WorkflowEventType.REMINDER_SCHEDULED,
+        WorkflowEventType.REMINDER_STARTED,
+        WorkflowEventType.REMINDER_SENT,
+        WorkflowEventType.REMINDER_FAILED,
+        WorkflowEventType.REMINDER_CANCELLED,
+    }
+)
+
+# The closed set `record_approval_event` accepts — see that method.
+_APPROVAL_EVENT_TYPES = frozenset(
+    {
+        WorkflowEventType.APPROVAL_REQUESTED,
+        WorkflowEventType.APPROVAL_GRANTED,
+        WorkflowEventType.APPROVAL_REJECTED,
+    }
 )
 
 # Centralized run-level state machine (see the module docstring). Keys are
@@ -318,6 +338,23 @@ class WorkflowService:
             )
         )
 
+    async def list_events_since(
+        self, *, organization_id: uuid.UUID, workflow_run_id: uuid.UUID, after_sequence: int
+    ) -> list[WorkflowEvent]:
+        """Events for one run with `sequence > after_sequence`, oldest
+        first — the polling primitive Milestone B's Server-Sent Events
+        stream is built on (see `app.repositories.workflow_event.list_since`).
+        Caller must have already authorized access to `workflow_run_id`
+        (e.g. via `get_workflow`)."""
+        return list(
+            await workflow_event_repository.list_since(
+                self._session,
+                organization_id=organization_id,
+                workflow_run_id=workflow_run_id,
+                after_sequence=after_sequence,
+            )
+        )
+
     async def _transition_run(
         self,
         *,
@@ -351,7 +388,7 @@ class WorkflowService:
         run.status = to_status
         if to_status is WorkflowStatus.RUNNING and run.started_at is None:
             run.started_at = now
-        if to_status in _TERMINAL_RUN_STATUSES:
+        if to_status in TERMINAL_RUN_STATUSES:
             run.completed_at = now
         if failure_code is not None:
             run.failure_code = failure_code
@@ -513,7 +550,7 @@ class WorkflowService:
         )
         if run is None:
             raise WorkflowNotFoundError("No workflow found with this id in this organization.")
-        if run.status in _TERMINAL_RUN_STATUSES:
+        if run.status in TERMINAL_RUN_STATUSES:
             raise WorkflowConflictError(
                 f"Cannot add a step to a workflow in terminal status '{run.status.value}'."
             )
@@ -689,6 +726,54 @@ class WorkflowService:
             actor_identifier=actor_identifier,
         )
 
+    async def mark_step_waiting(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        workflow_run_id: uuid.UUID,
+        step_id: uuid.UUID,
+        actor_type: ActorType,
+        actor_identifier: str,
+        safe_metadata: dict[str, Any] | None = None,
+    ) -> WorkflowStep:
+        """`RUNNING` -> `WAITING`, with a `STEP_WAITING` event — the
+        step-level analog of `mark_waiting` (STORY-014). Used by
+        `app.services.approval.ApprovalService` to pause the ONE step an
+        `ApprovalRequest` gates, paired with `mark_waiting` pausing the
+        step's run — see that service for why both are always paused
+        together."""
+        return await self._transition_step(
+            organization_id=organization_id,
+            workflow_run_id=workflow_run_id,
+            step_id=step_id,
+            to_status=StepStatus.WAITING,
+            event_type=WorkflowEventType.STEP_WAITING,
+            actor_type=actor_type,
+            actor_identifier=actor_identifier,
+            safe_metadata=safe_metadata,
+        )
+
+    async def resume_step(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        workflow_run_id: uuid.UUID,
+        step_id: uuid.UUID,
+        actor_type: ActorType,
+        actor_identifier: str,
+    ) -> WorkflowStep:
+        """`WAITING` -> `RUNNING`, with a `STEP_RESUMED` event — the
+        step-level analog of `resume_workflow` (STORY-014)."""
+        return await self._transition_step(
+            organization_id=organization_id,
+            workflow_run_id=workflow_run_id,
+            step_id=step_id,
+            to_status=StepStatus.RUNNING,
+            event_type=WorkflowEventType.STEP_RESUMED,
+            actor_type=actor_type,
+            actor_identifier=actor_identifier,
+        )
+
     async def record_tool_invocation(
         self,
         *,
@@ -777,8 +862,109 @@ class WorkflowService:
         await self._session.commit()
         return event
 
+    async def record_reminder_event(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        workflow_run_id: uuid.UUID,
+        step_id: uuid.UUID,
+        actor_type: ActorType,
+        actor_identifier: str,
+        event_type: WorkflowEventType,
+        safe_metadata: dict[str, Any] | None = None,
+    ) -> WorkflowEvent:
+        """Append one of the five reminder-lifecycle events (STORY-013:
+        `REMINDER_SCHEDULED`/`REMINDER_STARTED`/`REMINDER_SENT`/
+        `REMINDER_FAILED`/`REMINDER_CANCELLED`) for `step_id` — a single
+        generic method covering all five rather than five near-identical
+        ones, since they share the exact same shape `record_tool_invocation`/
+        `record_agent_handoff` already established: a pure audit-trail
+        addition, no step/run state transition. `safe_metadata` must
+        carry ONLY bounded, safe fields (e.g. reminder id, attempt
+        number, a safe result/failure code) — never notification
+        content, contact details, or any other PHI; see
+        `app.services.reminder.ReminderService` for every call site.
+        Commits immediately, the same reasoning as its two siblings.
+        """
+        if event_type not in _REMINDER_EVENT_TYPES:
+            raise ValueError(f"{event_type!r} is not a reminder lifecycle event type.")
+
+        step = await workflow_step_repository.get_by_id(
+            self._session,
+            organization_id=organization_id,
+            workflow_run_id=workflow_run_id,
+            step_id=step_id,
+        )
+        if step is None:
+            raise WorkflowStepNotFoundError("No step found with this id in this workflow.")
+
+        event = await workflow_event_repository.create(
+            self._session,
+            WorkflowEvent(
+                organization_id=organization_id,
+                workflow_run_id=workflow_run_id,
+                workflow_step_id=step_id,
+                event_type=event_type,
+                actor_type=actor_type,
+                actor_identifier=actor_identifier,
+                safe_metadata=safe_metadata,
+            ),
+        )
+        await self._session.commit()
+        return event
+
+    async def record_approval_event(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        workflow_run_id: uuid.UUID,
+        step_id: uuid.UUID,
+        actor_type: ActorType,
+        actor_identifier: str,
+        event_type: WorkflowEventType,
+        safe_metadata: dict[str, Any] | None = None,
+    ) -> WorkflowEvent:
+        """Append one of the three approval-lifecycle events (STORY-014:
+        `APPROVAL_REQUESTED`/`APPROVAL_GRANTED`/`APPROVAL_REJECTED`) for
+        `step_id` — directly mirrors `record_reminder_event`'s shape: a
+        single generic method covering all three, a pure audit-trail
+        addition, no step/run state transition of its own (pairing that
+        transition is the CALLER's responsibility — see
+        `app.services.approval.ApprovalService`). `safe_metadata` must
+        carry ONLY bounded, safe fields (e.g. approval id, approval
+        type) — never the Coordinator's reasoning or any free-form text.
+        Commits immediately, the same reasoning as its siblings.
+        """
+        if event_type not in _APPROVAL_EVENT_TYPES:
+            raise ValueError(f"{event_type!r} is not an approval lifecycle event type.")
+
+        step = await workflow_step_repository.get_by_id(
+            self._session,
+            organization_id=organization_id,
+            workflow_run_id=workflow_run_id,
+            step_id=step_id,
+        )
+        if step is None:
+            raise WorkflowStepNotFoundError("No step found with this id in this workflow.")
+
+        event = await workflow_event_repository.create(
+            self._session,
+            WorkflowEvent(
+                organization_id=organization_id,
+                workflow_run_id=workflow_run_id,
+                workflow_step_id=step_id,
+                event_type=event_type,
+                actor_type=actor_type,
+                actor_identifier=actor_identifier,
+                safe_metadata=safe_metadata,
+            ),
+        )
+        await self._session.commit()
+        return event
+
 
 __all__ = [
+    "TERMINAL_RUN_STATUSES",
     "WorkflowConflictError",
     "WorkflowIdempotencyKeyConflictError",
     "WorkflowInitiatorNotActiveMemberError",

@@ -30,12 +30,21 @@ class AgentExecuteRequest(BaseModel):
     own linked patient id, the same rule
     `app.schemas.workflow.WorkflowRunCreate` already applies. No
     conversation-history field exists — this endpoint accepts exactly
-    one request, decides exactly one thing.
+    one request, decides exactly one thing (per turn — see
+    `workflow_run_id` below).
+
+    `workflow_run_id` (STORY-015), when supplied, RESUMES that existing
+    workflow run instead of starting a new one — only valid when the run
+    is currently paused (`WAITING`) on a Coordinator clarification, not
+    an approval decision (use the approvals API for that — see
+    `app.ai.orchestration.AgentOrchestrationService._resume_run_and_step`).
+    `request_type` is ignored when resuming (the run already has one).
     """
 
     request_type: WorkflowRequestType
     request_text: str = Field(min_length=1, max_length=_REQUEST_TEXT_MAX_LENGTH)
     patient_id: uuid.UUID | None = None
+    workflow_run_id: uuid.UUID | None = None
 
 
 class AgentExecuteResponse(BaseModel):
@@ -61,5 +70,9 @@ class AgentExecuteResponse(BaseModel):
     tool_name: str | None
     tool_result_code: str | None
     tool_result_data: dict[str, Any] | None
+    approval_id: uuid.UUID | None = None
+    """STORY-014: set only when `decision_kind` is `requires_approval` —
+    the id of the `ApprovalRequest` now pausing this workflow. See
+    `app.api.v1.endpoints.approvals`."""
 
     model_config = {"from_attributes": True}

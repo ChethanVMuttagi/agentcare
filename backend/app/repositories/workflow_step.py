@@ -50,7 +50,19 @@ async def get_by_id_for_update(
 ) -> WorkflowStep | None:
     """Same as `get_by_id`, but locks the row (`SELECT ... FOR UPDATE`) —
     see `app.repositories.workflow_run.get_by_id_for_update` for the
-    concurrency rationale, applied here at step granularity."""
+    concurrency rationale, applied here at step granularity.
+
+    `populate_existing=True` is required, not cosmetic: if this session
+    already loaded this exact `WorkflowStep` earlier (e.g. an unlocked
+    precondition read before this locked one), SQLAlchemy's identity map
+    returns that SAME Python object by default and does NOT overwrite
+    its already-populated attributes from this query's result — so
+    `.status` would silently keep reflecting the value seen before this
+    call blocked on the lock, even though the ROW itself was correctly
+    locked and the query genuinely waited. `populate_existing=True`
+    forces this query's result to overwrite the object's attributes,
+    which is the entire point of a "for update" read: the caller must
+    see the CURRENT, contention-safe state, never a stale cached one."""
     result = await session.execute(
         select(WorkflowStep)
         .where(
@@ -59,6 +71,7 @@ async def get_by_id_for_update(
             WorkflowStep.id == step_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
 

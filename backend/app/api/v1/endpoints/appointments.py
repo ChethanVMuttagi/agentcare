@@ -1,5 +1,11 @@
 """Appointment endpoints: booking, rescheduling, cancellation.
 
+STORY-013: every mutating route here passes `current_user.id` as
+`AppointmentService`'s `initiated_by_user_id`, so booking/rescheduling/
+cancelling an appointment automatically schedules/reschedules/cancels
+its reminder — see `app.services.reminder_scheduler.ReminderScheduler`
+and docs/adr/ADR-0012-reminder-engine.md.
+
 RBAC (see docs/APPOINTMENTS.md "RBAC" and docs/RBAC.md): `ADMIN`/`STAFF`
 may book, view, list (organization-wide), reschedule, and cancel any
 appointment in their organization. `PATIENT` may book, view, reschedule,
@@ -140,6 +146,7 @@ async def create_appointment(
         department_id=payload.department_id,
         start_at=payload.start_at,
         duration_minutes=payload.duration_minutes,
+        initiated_by_user_id=current_user.id,
     )
     return AppointmentResponse.model_validate(appointment)
 
@@ -215,6 +222,7 @@ async def reschedule_appointment(
         start_at=payload.start_at,
         duration_minutes=payload.duration_minutes,
         patient_id=restriction,
+        initiated_by_user_id=current_user.id,
     )
     return AppointmentResponse.model_validate(appointment)
 
@@ -239,5 +247,6 @@ async def cancel_appointment(
         appointment_id=appointment_id,
         cancellation_reason=payload.cancellation_reason,
         patient_id=restriction,
+        initiated_by_user_id=current_user.id,
     )
     return AppointmentResponse.model_validate(appointment)

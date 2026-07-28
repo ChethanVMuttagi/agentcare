@@ -244,26 +244,99 @@ or agent workflows exist.
   Backed by AgentCare's ninth Alembic migration. See
   [docs/AGENTS.md](docs/AGENTS.md) and
   [docs/adr/ADR-0011-multi-agent-coordination.md](docs/adr/ADR-0011-multi-agent-coordination.md).
+- **Durable, restart-safe reminder engine** (`app/models/reminder.py`,
+  `app/repositories/reminder*.py`, `app/services/reminder*.py`,
+  `app/workers/reminder_worker.py`, `app/notifications/`): the reminder
+  queue is a real `reminders` table, never an in-memory queue or a
+  background thread that could lose work — every claim is a PostgreSQL
+  `SELECT ... FOR UPDATE SKIP LOCKED` (proven safe under genuinely
+  concurrent workers, never a double send), and an abandoned lock (a
+  worker that crashed mid-attempt) is automatically recovered by the
+  next poll. Booking, rescheduling, and cancelling an appointment
+  automatically schedules/reschedules/cancels its reminder through
+  `AppointmentService` — including the Scheduling agent's
+  `book_appointment` tool, which triggers this the SAME way, through the
+  SAME service boundary, never bypassing it. Every reminder owns its own
+  `WorkflowRun`, so its full scheduled -> started -> sent/failed ->
+  [cancelled] lifecycle is durably visible in the same workflow audit
+  trail every other capability uses — five new `WorkflowEventType`
+  values (`reminder_scheduled`/`started`/`sent`/`failed`/`cancelled`).
+  Retries are bounded (`max_attempts`) with a permanent, append-only
+  per-attempt audit trail (`ReminderAttempt`); a `ConsoleNotificationProvider`
+  is the one real delivery channel this story ships (no email/SMS/
+  WhatsApp yet — the abstraction is provider-agnostic so adding one is a
+  new adapter, not a redesign). Backed by AgentCare's tenth Alembic
+  migration. See
+  [docs/adr/ADR-0012-reminder-engine.md](docs/adr/ADR-0012-reminder-engine.md).
+- **Human-in-the-loop approval engine** (`app/models/approval.py`,
+  `app/repositories/approval.py`, `app/services/approval.py`,
+  `app/api/v1/endpoints/approvals.py`): the Coordinator agent, instead of
+  guessing on a low-confidence, ambiguous, or policy-restricted request,
+  can pause the workflow and request a human decision
+  (`CoordinatorRequiresApprovalDecision`) — a fourth Coordinator outcome
+  alongside handoff/clarification/refusal, still structurally unable to
+  call a tool. An `ApprovalRequest` is never a parallel audit trail: it
+  always gates an EXISTING `WorkflowStep`/`WorkflowRun`, and
+  requesting one always pauses both (`WAITING`, reusing STORY-009's
+  existing pause/resume primitives at both run AND step granularity —
+  two new step-level `WorkflowService` methods, `mark_step_waiting`/
+  `resume_step`). `ADMIN`/`SUPERVISOR` (a new `Role`) may approve or
+  reject; `STAFF` may raise a request but not resolve one. Approving
+  resumes and completes the workflow; rejecting resumes and cancels it;
+  an approval past its deadline lazily expires (no background sweep
+  worker) the next time anyone tries to act on it, failing the workflow
+  instead of silently honoring a late decision. Three new
+  `WorkflowEventType` values (`approval_requested`/`granted`/`rejected`)
+  plus two more (`step_waiting`/`step_resumed`) share the same durable
+  audit trail every other capability uses. Backed by AgentCare's
+  eleventh Alembic migration. See
+  [ADR-0013](docs/adr/ADR-0013-human-in-the-loop-approvals.md).
+- **End-to-end administrative workflow templates** (`app/workflows/templates.py`,
+  `app/services/patient_registration.py`): four reusable, declarative
+  `WorkflowTemplate`s (Patient Registration, Appointment Booking,
+  Appointment Rescheduling, Document Collection) combine every prior
+  workflow primitive into realistic, inspectable processes — never a
+  second, parallel execution engine (see
+  [ADR-0014](docs/adr/ADR-0014-end-to-end-administrative-workflows.md)).
+  Patient Registration is entirely new: a two-step, model-free workflow
+  (duplicate check, then record creation) that pauses for human approval
+  on a suspected duplicate, reusing the Approval Engine exactly like the
+  Coordinator does. The Coordinator can now RESUME a paused workflow: a
+  clarification pauses the run (`WAITING`) instead of ending it, and a
+  follow-up request carrying `workflow_run_id` continues the SAME run —
+  disambiguated from an approval pause, which still requires the
+  approvals API. A new `reschedule_appointment` tool makes Appointment
+  Rescheduling a real, working Coordinator-driven capability (not just a
+  label). Two new read-only inspection routes join the existing
+  `/workflows` API: `GET .../workflows/{id}/timeline` (steps and events
+  merged, chronologically) and `POST .../workflows/patient-registrations`
+  (the trigger for the one workflow kind with no natural-language entry
+  point). Backed by AgentCare's twelfth Alembic migration.
 - Backend test suite (`backend/tests/`) exercising the real FastAPI app,
   real (SQLite-backed, for isolation) infrastructure-level database
-  behavior, all fourteen domain models, password hashing, JWT handling,
+  behavior, all seventeen domain models, password hashing, JWT handling,
   the auth API, the full patient/department/practitioner/availability/
-  appointment/document/workflow/AI-tool/multi-agent repository/service/API
-  layers end-to-end against real PostgreSQL, dedicated real-concurrency
-  tests proving both the appointment double-booking guarantee AND the
-  workflow-transition race guarantee under genuinely concurrent
-  transactions, a dedicated persistence/restart proof for workflow
-  state, TWO mandatory end-to-end proofs that an AI-assisted patient
-  request genuinely persists real state and a full multi-agent workflow
-  audit trail — one via a Scheduling handoff, one via a Document
+  appointment/document/workflow/AI-tool/multi-agent/reminder/approval/
+  workflow-template repository/service/API layers end-to-end against
+  real PostgreSQL, dedicated real-concurrency tests proving the
+  appointment double-booking guarantee, the workflow-transition race
+  guarantee, the reminder-worker claim guarantee, AND the approval-
+  decision/approval-pause race guarantees, all under genuinely
+  concurrent transactions, a dedicated persistence/restart proof for
+  workflow state, mandatory end-to-end proofs that an AI-assisted
+  patient request genuinely persists real state, a full multi-agent
+  workflow audit trail (one via a Scheduling handoff, one via a Document
   handoff, so the architecture is proven not to be hardwired only for
-  scheduling — a full adversarial/security test suite (hostile tool
-  names, prompt-injection attempts including cross-agent injection
-  phrases, cross-tenant/cross-patient rejection, malformed model output,
-  cross-agent permission-denial cases), and filesystem-storage/
-  file-signature tests using only temporary directories (never a
-  tracked path) — every AI-related test uses a deterministic fake LLM
-  provider, never a real network call or API key
+  scheduling), the full reminder lifecycle, the full human-in-the-loop
+  approve/reject/expire lifecycle, and the full Patient Registration/
+  Appointment Booking/Appointment Rescheduling/clarification-pause-and-
+  resume workflow-template lifecycles — a full adversarial/security test
+  suite (hostile tool names, prompt-injection attempts including
+  cross-agent injection phrases, cross-tenant/cross-patient rejection,
+  malformed model output, cross-agent permission-denial cases), and
+  filesystem-storage/file-signature tests using only temporary
+  directories (never a tracked path) — every AI-related test uses a
+  deterministic fake LLM provider, never a real network call or API key
 
 **Not yet implemented** (planned, across future stories):
 - A CRUD API, service, and repository layer for `Organization`/`Facility`
@@ -278,17 +351,48 @@ or agent workflows exist.
   (a scoped available-times discovery endpoint IS implemented)
 - Further domain models below the tenant hierarchy (referrals, staff
   profiles, etc.)
-- Reschedule/cancel AI tools (see [docs/TOOLS.md](docs/TOOLS.md)
-  Section 6 for why this is a deliberate depth-over-breadth choice)
+- A cancel-appointment AI tool (reschedule is implemented — STORY-015;
+  see [docs/TOOLS.md](docs/TOOLS.md) Section 6 for why cancel remains a
+  deliberate depth-over-breadth deferral)
+- Real notification delivery channels (email/SMS/WhatsApp) — the
+  reminder engine's `NotificationProvider` abstraction supports adding
+  one without touching `ReminderService`/`ReminderWorker`, but only
+  `ConsoleNotificationProvider` exists so far; a reminder type beyond
+  `appointment_reminder`; a REST API surface for reminders (this story
+  is scheduling/delivery only, driven automatically by appointment
+  events and a background worker — see
+  [ADR-0012](docs/adr/ADR-0012-reminder-engine.md))
 - Patient update/delete; finer-grained permissions beyond `Role`; refresh
   tokens; token revocation; password reset; email verification; MFA;
   OAuth/social login; public user registration
+- A background sweep worker for expiring stale `ApprovalRequest`s — this
+  story's expiration is lazy only (checked when someone next tries to
+  approve/reject), not a scheduled job; a notification channel alerting
+  a Supervisor that a request is waiting (the reminder engine's
+  `NotificationProvider` is not yet wired to approvals); "resume exactly
+  where paused" is scoped to the WORKFLOW's own state transitions
+  completing/cancelling, not an automatic tool-call replay — see
+  [ADR-0013](docs/adr/ADR-0013-human-in-the-loop-approvals.md)
 - Unrestricted multi-step planning, specialist-to-specialist delegation,
   LangGraph-based orchestration, and autonomous decision loops — the
   multi-agent foundation above (STORY-011) implements ONE Coordinator
   decision leading to AT MOST one handoff and AT MOST one specialist
-  tool execution; open-ended multi-step planning is a future story's
-  work, built on top of this foundation, not a redesign of it
+  tool execution PER TURN; STORY-015's resume capability lets a
+  clarification-paused run continue across turns, always in response to
+  a new, explicit caller request, never automatically or in a loop; open-
+  ended multi-step planning remains a future story's work, built on top
+  of this foundation, not a redesign of it
+- A generic, template-driven multi-step execution engine — STORY-015's
+  `WorkflowTemplate`s are declarative (they document a workflow kind's
+  step shape); each template's actual execution stays wherever it
+  already correctly lived (`AgentOrchestrationService` for Coordinator-
+  driven templates, a dedicated service for Patient Registration's
+  model-free one) — see
+  [ADR-0014](docs/adr/ADR-0014-end-to-end-administrative-workflows.md)
+- Pause/resume for a SPECIALIST's own clarification (as opposed to the
+  Coordinator's) — a specialist clarification still completes the run
+  immediately, unchanged from STORY-011; extending resume to that level
+  is a deliberate, explicit scope boundary, not an oversight
 - A general-purpose security/compliance audit system (distinct from
   `WorkflowEvent`'s own workflow-lifecycle audit trail — see
   [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Section 18)
@@ -338,15 +442,19 @@ recommendation, or any function that constitutes the practice of medicine.
 |---|---|---|
 | Backend API | Python, FastAPI | Implemented |
 | Configuration | Pydantic Settings | Implemented |
-| Database | PostgreSQL | Implemented (14 domain tables — see below) |
-| ORM | SQLAlchemy 2.x | Implemented (14 models, incl. composite-FK ownership integrity + GiST `EXCLUDE` constraints) |
-| Migrations | Alembic | Implemented (9 migrations, validated against real PostgreSQL) |
+| Database | PostgreSQL | Implemented (17 domain tables — see below) |
+| ORM | SQLAlchemy 2.x | Implemented (17 models, incl. composite-FK ownership integrity + GiST `EXCLUDE` constraints) |
+| Migrations | Alembic | Implemented (12 migrations, validated against real PostgreSQL) |
 | Authentication | Argon2id password hashing + JWT (PyJWT) | Implemented (`POST /auth/token`, `GET /auth/me`) |
-| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient + scheduling-resource + appointment + document + workflow + agent APIs |
+| Authorization | Backend-enforced RBAC (`require_roles`) | Implemented and enforced on the patient + scheduling-resource + appointment + document + workflow + agent + approval APIs, incl. a `SUPERVISOR` role scoped to approval decisions only |
 | Repository/Service layers | `app/repositories/`, `app/services/` | Implemented for `Patient`, scheduling resources, `Appointment`, `PatientDocument`, and `WorkflowRun`/`Step`/`Event`; not yet for `Organization`/`Facility` |
 | Document storage | `app/storage/` (`DocumentStorage` abstraction) | Implemented — filesystem-backed `LocalDocumentStorage` (local dev only); production object-storage backend planned |
 | Multi-Agent Coordination | `app/ai/agents/` (Coordinator + 3 specialists) | Implemented — see [docs/AGENTS.md](docs/AGENTS.md). No LangGraph adopted (see [ADR-0011](docs/adr/ADR-0011-multi-agent-coordination.md)) |
 | LLM Access | Provider-abstracted (`app/ai/providers/`) | Implemented — Anthropic Claude; a second provider (Groq/OpenAI) needs a new adapter only, no contract change |
+| Background Jobs / Reminder Engine | `app/workers/reminder_worker.py` (PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`) | Implemented — durable, restart-safe, concurrency-proven; see [ADR-0012](docs/adr/ADR-0012-reminder-engine.md). No Celery/Redis/external queue — the database IS the queue |
+| Notification Delivery | `app/notifications/` (`NotificationProvider` abstraction) | Implemented — `ConsoleNotificationProvider` only; email/SMS/WhatsApp planned as new adapters |
+| Human-in-the-Loop Approvals | `app/services/approval.py`, `app/api/v1/endpoints/approvals.py` | Implemented — Coordinator-triggered or manually-raised workflow pause/resume; see [ADR-0013](docs/adr/ADR-0013-human-in-the-loop-approvals.md). No background expiry sweep — expiration is lazy only |
+| Workflow Templates | `app/workflows/templates.py`, `app/services/patient_registration.py` | Implemented — 4 declarative templates (Patient Registration, Appointment Booking/Rescheduling, Document Collection); Coordinator clarification-pause/resume; see [ADR-0014](docs/adr/ADR-0014-end-to-end-administrative-workflows.md) |
 | Frontend | Next.js | Planned |
 | Containerization | Docker | Planned |
 
@@ -477,18 +585,47 @@ column and one new event type, `tool_invoked`, for the safe LLM &
 tool-calling foundation (see
 [docs/AI_SAFETY.md](docs/AI_SAFETY.md)/[docs/TOOLS.md](docs/TOOLS.md)),
 and one more new event type, `agent_handoff`, for genuine multi-agent
-coordination (see [docs/AGENTS.md](docs/AGENTS.md)).
+coordination (see [docs/AGENTS.md](docs/AGENTS.md)). The tenth migration
+adds the `reminders`/`reminder_attempts` tables (the durable reminder
+queue and its per-attempt audit trail — see
+[ADR-0012](docs/adr/ADR-0012-reminder-engine.md)), a supporting unique
+constraint on `appointments`, and five more `workflow_events` event
+types (`reminder_scheduled`/`started`/`sent`/`failed`/`cancelled`). The
+eleventh migration adds the `approval_requests` table (the durable
+human-in-the-loop approval gate — see
+[ADR-0013](docs/adr/ADR-0013-human-in-the-loop-approvals.md)), a new
+`supervisor` value on the `membership_role` CHECK constraint, and five
+more `workflow_events` event types (`step_waiting`/`step_resumed`/
+`approval_requested`/`approval_granted`/`approval_rejected`). The
+twelfth migration extends `workflow_request_type` with
+`patient_registration` only — no new table; Patient Registration reuses
+`workflow_runs`/`workflow_steps`/`workflow_events`/`approval_requests`
+exactly like every other workflow kind (see
+[ADR-0014](docs/adr/ADR-0014-end-to-end-administrative-workflows.md)).
 See [docs/DATABASE.md](docs/DATABASE.md) for the full migration workflow
 and testing strategy (SQLite is used only for isolated infrastructure-level
 tests; PostgreSQL remains the production database and is what every
 domain model, repository, service, and API test suite — including
-dedicated real-concurrency tests for both appointment booking and
-workflow transitions, and the two mandatory end-to-end multi-agent
-proofs (Scheduling handoff and Document handoff) — runs against;
-document storage tests use only pytest-managed temporary directories,
-never the real configured `DOCUMENT_STORAGE_PATH`; AI/multi-agent tests
-use a deterministic fake LLM provider, never a real network call or API
-key).
+dedicated real-concurrency tests for appointment booking, workflow
+transitions, concurrent reminder-worker claims (`SELECT ... FOR
+UPDATE SKIP LOCKED`, proven to never double-send), AND concurrent
+approval decisions/approval-requests (proven to never double-apply a
+decision or double-pause a step), the two mandatory end-to-end
+multi-agent proofs (Scheduling handoff and Document handoff), three
+mandatory end-to-end reminder proofs (booked -> delivered, cancelled ->
+skipped, rescheduled -> only the latest reminder delivered), three
+mandatory end-to-end approval proofs (Coordinator pause -> approve ->
+resumed and completed, pause -> reject -> resumed and cancelled, pause
+-> expires -> failed), and five mandatory end-to-end workflow-template
+proofs (Patient Registration with and without a suspected duplicate,
+Appointment Booking auto-scheduling a reminder, Appointment
+Rescheduling replacing the old reminder, and a Coordinator clarification
+pause -> resume -> handoff -> completion) — runs against; document
+storage tests use only pytest-managed temporary directories, never the
+real configured `DOCUMENT_STORAGE_PATH`; AI/multi-agent tests use a
+deterministic fake LLM provider, and reminder tests use a deterministic
+fake notification provider — neither ever makes a real network call or
+uses a real API key).
 
 Run the test suite and quality checks from `backend/`:
 

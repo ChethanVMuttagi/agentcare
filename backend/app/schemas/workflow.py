@@ -121,3 +121,34 @@ class WorkflowEventListResponse(BaseModel):
     """`GET .../workflows/{workflow_id}/events` response envelope."""
 
     events: list[WorkflowEventResponse]
+
+
+class WorkflowTimelineEntry(BaseModel):
+    """STORY-015: one `WorkflowEvent`, denormalized with a summary of the
+    `WorkflowStep` it belongs to (if any) — so a caller building a
+    human-readable timeline doesn't need a SECOND request (`/steps`) and
+    a client-side join to know "which step was this, and what kind of
+    step was it." `sequence` is the SAME authoritative, gap-free
+    ordering key `app.repositories.workflow_event.list_by_run` already
+    uses server-side (see `app.models.workflow.WorkflowEvent.sequence`'s
+    docstring) — never `created_at`, which is not a valid tiebreaker.
+    """
+
+    sequence: int
+    event_type: WorkflowEventType
+    actor_type: ActorType
+    actor_identifier: str
+    safe_metadata: dict[str, Any] | None
+    created_at: datetime
+    workflow_step_id: uuid.UUID | None
+    step_sequence_number: int | None
+    step_type: str | None
+    step_agent_name: str | None
+
+
+class WorkflowTimelineResponse(BaseModel):
+    """`GET .../workflows/{workflow_id}/timeline` response envelope."""
+
+    workflow_id: uuid.UUID
+    status: WorkflowStatus
+    entries: list[WorkflowTimelineEntry]

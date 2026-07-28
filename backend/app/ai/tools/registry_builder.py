@@ -22,7 +22,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from app.ai.tools.appointment_tools import BOOK_APPOINTMENT_TOOL, CHECK_AVAILABILITY_TOOL
+from app.ai.tools.appointment_tools import (
+    BOOK_APPOINTMENT_TOOL,
+    CHECK_AVAILABILITY_TOOL,
+    RESCHEDULE_APPOINTMENT_TOOL,
+)
 from app.ai.tools.document_tools import LIST_PATIENT_DOCUMENTS_TOOL
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.routing_tools import RESOLVE_DEPARTMENT_TOOL
@@ -36,6 +40,7 @@ def build_full_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(CHECK_AVAILABILITY_TOOL)
     registry.register(BOOK_APPOINTMENT_TOOL)
+    registry.register(RESCHEDULE_APPOINTMENT_TOOL)
     registry.register(LIST_PATIENT_DOCUMENTS_TOOL)
     registry.register(RESOLVE_DEPARTMENT_TOOL)
     return registry
