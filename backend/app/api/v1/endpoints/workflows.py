@@ -37,11 +37,12 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_roles
+from app.core.pagination import MAX_PAGE_SIZE
 from app.db.session import get_db_session, get_sessionmaker
 from app.models.membership import OrganizationMembership, Role
 from app.models.user import User
@@ -194,8 +195,8 @@ async def list_workflows(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     membership: Annotated[OrganizationMembership, Depends(_require_any_access)],
     current_user: Annotated[User, Depends(get_current_user)],
-    limit: int = 50,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> WorkflowRunListResponse:
     """List workflow runs. ADMIN/STAFF: organization-wide. PATIENT: their
     own workflows only."""

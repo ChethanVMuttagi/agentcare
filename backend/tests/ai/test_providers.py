@@ -7,10 +7,13 @@ in this codebase uses instead of a real network call) and
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from app.ai.coordinator_decisions import CoordinatorRefusalDecision, HandoffDecision, TargetAgent
 from app.ai.decisions import RefusalCategory, RefusalDecision
+from app.ai.providers.anthropic_provider import AnthropicProvider
 from app.ai.providers.base import StructuredCompletionRequest
 from app.ai.providers.errors import (
     ProviderConfigurationError,
@@ -18,9 +21,10 @@ from app.ai.providers.errors import (
     ProviderTimeoutError,
     ProviderUnavailableError,
 )
-from app.ai.providers.factory import build_llm_provider
+from app.ai.providers.factory import build_llm_provider, close_llm_provider, get_llm_provider
 from app.ai.providers.fake_provider import AlwaysUnavailableFakeLLMProvider, FakeLLMProvider
-from app.core.config import Settings
+from app.ai.providers.groq_provider import GroqProvider
+from app.core.config import Settings, get_settings
 
 _REQUEST = StructuredCompletionRequest(system_prompt="system", user_content="book an appointment")
 
@@ -175,7 +179,7 @@ def test_build_llm_provider_requires_provider_configured() -> None:
 def test_build_llm_provider_rejects_unsupported_provider() -> None:
     settings = Settings(
         _env_file=None,
-        llm_provider="groq",
+        llm_provider="openai",
         llm_model="some-model",
         llm_api_key="synthetic-test-key",
     )
@@ -208,6 +212,18 @@ def test_build_llm_provider_succeeds_with_full_configuration() -> None:
     )
     provider = build_llm_provider(settings)
     assert provider is not None
+    assert isinstance(provider, AnthropicProvider)
+
+
+def test_build_llm_provider_selects_groq() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm_provider="groq",
+        llm_model="llama-fake-model",
+        llm_api_key="synthetic-test-key",
+    )
+    provider = build_llm_provider(settings)
+    assert isinstance(provider, GroqProvider)
 
 
 def test_provider_configuration_error_never_contains_the_api_key() -> None:
@@ -220,3 +236,75 @@ def test_provider_configuration_error_never_contains_the_api_key() -> None:
         assert "synthetic-super-secret-key-value" not in exc.message
     else:
         pytest.fail("expected ProviderConfigurationError")
+
+
+# --- get_llm_provider / close_llm_provider (Sprint 2: shared client lifecycle) ---
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_caches() -> Iterator[None]:
+    """`get_llm_provider` (like `get_settings`) is a process-wide
+    `@lru_cache`d singleton — every test in this module that touches it
+    must start and end with a clean slate, or it would leak a
+    provider/HTTP client built by one test's env vars into the next."""
+    get_settings.cache_clear()
+    get_llm_provider.cache_clear()
+    yield
+    get_settings.cache_clear()
+    get_llm_provider.cache_clear()
+
+
+def test_get_llm_provider_returns_the_same_cached_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("LLM_MODEL", "llama-fake-model")
+    monkeypatch.setenv("LLM_API_KEY", "synthetic-test-key")
+
+    first = get_llm_provider()
+    second = get_llm_provider()
+
+    assert first is second
+
+
+def test_get_llm_provider_raises_when_unconfigured_and_does_not_cache_the_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`functools.lru_cache` never caches an exception — confirms a
+    later, correctly-configured call still succeeds rather than
+    permanently remembering the earlier failure (see
+    `app.ai.providers.factory.get_llm_provider`'s docstring).
+
+    Monkeypatches `get_settings` directly inside `app.ai.providers.factory`
+    (rather than relying on no LLM env vars being set) so this test is
+    correct regardless of whatever a developer's own local `backend/.env`
+    happens to have configured."""
+    import app.ai.providers.factory as factory_module
+
+    monkeypatch.setattr(factory_module, "get_settings", lambda: Settings(_env_file=None))
+
+    with pytest.raises(ProviderConfigurationError):
+        get_llm_provider()
+
+    assert get_llm_provider.cache_info().currsize == 0
+
+
+async def test_close_llm_provider_is_a_no_op_when_nothing_was_ever_built() -> None:
+    await close_llm_provider()  # must not raise
+
+
+async def test_close_llm_provider_closes_the_underlying_http_client_and_clears_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("LLM_MODEL", "llama-fake-model")
+    monkeypatch.setenv("LLM_API_KEY", "synthetic-test-key")
+
+    provider = get_llm_provider()
+    assert isinstance(provider, GroqProvider)
+    assert provider._client.is_closed is False  # type: ignore[attr-defined]
+
+    await close_llm_provider()
+
+    assert provider._client.is_closed is True  # type: ignore[attr-defined]
+    assert get_llm_provider.cache_info().currsize == 0

@@ -7,7 +7,7 @@ import { CancelWorkflowButton } from "@/features/workflows/cancel-workflow-butto
 import { LiveExecutionPanel } from "@/features/workflows/live-execution-panel";
 import { requireSession } from "@/lib/require-session";
 import { settle } from "@/lib/utils";
-import { getWorkflowTimeline } from "@/services/workflows";
+import { getWorkflowTimeline, listWorkflowSteps } from "@/services/workflows";
 
 export const metadata: Metadata = { title: "Workflow Trace — AgentCare" };
 
@@ -21,15 +21,20 @@ export default async function WorkflowDetailPage({
   const { organizationId, workflowId } = await params;
   const session = await requireSession();
 
-  const result = await settle(
-    getWorkflowTimeline({ token: session.token, organizationId, workflowId }),
-  );
+  const [result, stepsResult] = await Promise.all([
+    settle(getWorkflowTimeline({ token: session.token, organizationId, workflowId })),
+    settle(listWorkflowSteps({ token: session.token, organizationId, workflowId })),
+  ]);
 
   if (!result.success) {
     return <ErrorState error={result.error} title="Couldn't load workflow" />;
   }
 
   const timeline = result.data;
+  // Enriches the Timeline with exact per-step duration/attempt counts —
+  // not fatal if it fails, since `Timeline` derives what it can from the
+  // (already-loaded) event timestamps alone.
+  const steps = stepsResult.success ? stepsResult.data.steps : undefined;
 
   return (
     <div className="space-y-6">
@@ -55,6 +60,7 @@ export default async function WorkflowDetailPage({
             workflowId={workflowId}
             initialEntries={timeline.entries}
             initialStatus={timeline.status}
+            initialSteps={steps}
           />
         </CardContent>
       </Card>

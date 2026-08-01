@@ -91,7 +91,7 @@ from app.ai.providers.errors import (
     ProviderUnavailableError,
 )
 from app.ai.safety import SafetyPolicy
-from app.ai.tools.base import ToolExecutionContext, ToolResultStatus
+from app.ai.tools.base import ToolExecutionContext, ToolResultStatus, describe_tool_arguments
 from app.ai.tools.registry import ToolRegistry
 from app.models.membership import Role
 from app.models.workflow import (
@@ -672,6 +672,27 @@ class AgentOrchestrationService:
             approval_id=approval.id,
         )
 
+    def _specialist_system_prompt(self, specialist: AgentDefinition) -> str:
+        """`specialist.system_prompt` plus the exact argument schema for
+        each tool this specialist is allowed to call — see
+        `app.ai.tools.base.describe_tool_arguments` for why this is
+        necessary (a specialist's own argument shape is otherwise never
+        communicated to the model at all). Tool names come from the
+        specialist's OWN `allowed_tools`, not the full registry, so a
+        specialist is never told about a tool it cannot use; each name
+        is looked up in `self._tool_registry` (the full registry — see
+        `app.ai.tools.registry_builder.build_full_tool_registry`), which
+        is guaranteed to contain every specialist's allowed tools (see
+        that module's docstring)."""
+        tool_specs = [
+            describe_tool_arguments(tool)
+            for tool_name in sorted(specialist.allowed_tools)
+            if (tool := self._tool_registry.get(tool_name)) is not None
+        ]
+        if not tool_specs:
+            return specialist.system_prompt
+        return specialist.system_prompt + "\n\n" + "\n\n".join(tool_specs)
+
     async def _execute_handoff(
         self,
         decision: HandoffDecision,
@@ -758,7 +779,8 @@ class AgentOrchestrationService:
         try:
             specialist_decision = await self._provider.generate_structured(
                 StructuredCompletionRequest(
-                    system_prompt=specialist.system_prompt, user_content=request_text
+                    system_prompt=self._specialist_system_prompt(specialist),
+                    user_content=request_text,
                 )
             )
         except _ProviderError as exc:

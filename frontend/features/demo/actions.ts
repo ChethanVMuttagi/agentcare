@@ -1,22 +1,21 @@
 "use server";
 
-import { redirect } from "next/navigation";
-
 import type { DemoScenarioState } from "@/features/demo/action-state";
 import { describeError } from "@/lib/errors";
 import { requireSession } from "@/lib/require-session";
 import { executeAgentRequest } from "@/services/agent";
+import { getWorkflowTimeline } from "@/services/workflows";
 import type { WorkflowRequestType } from "@/types/api";
 
 /**
- * Demo Mode (Milestone B): runs a canned prompt through the REAL AI
- * Assistant endpoint (`app.api.v1.endpoints.agent.execute_agent_request`
- * — the exact same one `features/assistant/actions.ts` calls) rather
- * than fabricating a fake workflow client-side, then redirects to that
- * workflow's AI Trace page so the Live Agent Execution panel picks it up
- * immediately. Nothing here is scripted/mocked — every scenario is a
- * genuine orchestration run, so the demo shows real handoffs, tool
- * calls, and decisions, not a canned recording.
+ * Demo Mode (Milestone B/C): runs a canned prompt through the REAL AI
+ * Assistant endpoint (`app.api.v1.endpoints.agent.execute_administrative_request`
+ * — the exact same one `features/assistant/actions.ts` calls), then also
+ * fetches the resulting workflow's full timeline so `scenario-card.tsx`
+ * can play it back as a staged reveal on THIS page, without navigating
+ * away first. Nothing here is scripted/mocked — every scenario is a
+ * genuine orchestration run; only the reveal pacing is animated (see
+ * `hooks/use-staged-reveal.ts`).
  */
 export async function runDemoScenarioAction(
   organizationId: string,
@@ -26,17 +25,22 @@ export async function runDemoScenarioAction(
 ): Promise<DemoScenarioState> {
   const session = await requireSession();
 
-  let workflowId: string;
   try {
     const response = await executeAgentRequest({
       token: session.token,
       organizationId,
       data: { request_type: requestType, request_text: requestText },
     });
-    workflowId = response.workflow_id;
+    const timeline = await getWorkflowTimeline({
+      token: session.token,
+      organizationId,
+      workflowId: response.workflow_id,
+    });
+    return {
+      error: null,
+      result: { response, entries: timeline.entries, status: timeline.status },
+    };
   } catch (error) {
-    return { error: describeError(error) };
+    return { error: describeError(error), result: null };
   }
-
-  redirect(`/org/${organizationId}/workflows/${workflowId}`);
 }

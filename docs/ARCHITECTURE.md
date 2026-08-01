@@ -302,8 +302,11 @@ AT MOST one specialist tool call — see [AGENTS.md](AGENTS.md) Section
 (see [TOOLS.md](TOOLS.md) Section 6); a general-purpose security/
 compliance audit system (distinct from `WorkflowEvent`'s own
 workflow-lifecycle audit trail — see [WORKFLOWS.md](WORKFLOWS.md)
-Section 18); any frontend; public user registration; password reset;
-email verification; refresh tokens; or MFA.
+Section 18); public user registration; password reset; email
+verification; refresh tokens; or MFA.
+
+A Next.js frontend (`frontend/`) DOES now exist, consuming this
+versioned API — see [frontend/README.md](../frontend/README.md).
 
 ## 3. Planned Architecture (NOT Implemented)
 
@@ -372,8 +375,10 @@ Everything in this section is direction, not current behavior.
   [SCHEDULING_RESOURCES.md](SCHEDULING_RESOURCES.md) Section 14 and
   [AI_SAFETY.md](AI_SAFETY.md) Section 7 — and needs its own ADR before
   relaxing STORY-011's execution limits.
-- **Docker** packaging for consistent local/dev/prod environments.
-- **A Next.js frontend** consuming the versioned API.
+- **Docker** packaging for consistent local/dev/prod environments, and any
+  CD/deployment automation — CI (lint/type-check/test/coverage/E2E/
+  security-scanning) is implemented; nothing builds a container image or
+  deploys anywhere yet.
 
 ## 4. Backend Layering Philosophy
 
@@ -700,6 +705,22 @@ tools will simply not expose clinical-decision capabilities.
 - Test values (e.g. a JWT secret used only to test that `SecretStr` masking
   works, or synthetic organization/facility/user/email/password/patient/
   practitioner values) are synthetic and clearly non-production.
+- Sprint 3 (release confidence/QA hardening) added: property-based tests
+  (`hypothesis`) for pure invariants (tool-argument description, JWT
+  round-tripping, pagination bounds) that a fixed set of example-based
+  cases can't exhaustively cover; a genuinely concurrent (not sequential)
+  test of the rate limiter's own atomicity; lightweight in-process load
+  tests (`httpx.AsyncClient` + `asyncio.gather`) against core read paths;
+  coverage thresholds enforced in CI for both the backend
+  (`pyproject.toml`'s `[tool.coverage.report]`) and frontend
+  (`frontend/vitest.config.mts`); and end-to-end coverage of the frontend
+  itself (`frontend/e2e/`, Playwright) across authentication, dashboard,
+  patients, appointments, workflow-execution viewing, the AI Assistant,
+  and Demo Mode — the workflow-execution and dashboard/patients/
+  appointments specs run against seeded, deterministic data
+  (`backend/scripts/seed_e2e.py`) with no LLM call involved; the AI
+  Assistant/Demo Mode specs additionally exercise a real provider only
+  when an API key secret happens to be configured in CI.
 - As services, repositories, and workflows are introduced, this section
   will describe how unit, integration, and end-to-end layers divide.
 

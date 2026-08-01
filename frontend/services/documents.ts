@@ -49,9 +49,8 @@ export async function deleteDocument(
 }
 
 /** Returns the raw, still-streaming `Response` for a document download —
- * the caller (the `/api/backend` proxy route; see docs/FRONTEND.md
- * "Document Download") pipes it straight through to the browser with
- * the backend's own `Content-Disposition`/`Content-Type` headers. */
+ * the caller pipes it straight through to the browser with the
+ * backend's own `Content-Disposition`/`Content-Type` headers. */
 export async function downloadDocument(
   params: PatientScoped & { documentId: string },
 ): Promise<Response> {

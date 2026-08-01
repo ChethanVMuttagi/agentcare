@@ -12,6 +12,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.schemas.common import ErrorDetail, ErrorResponse
@@ -53,6 +54,16 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppException)
     async def handle_app_exception(request: Request, exc: AppException) -> JSONResponse:
         return _error_response(exc.status_code, exc.error_code, exc.message)
+
+    @app.exception_handler(RateLimitExceeded)
+    async def handle_rate_limit_exceeded(
+        request: Request, exc: RateLimitExceeded
+    ) -> JSONResponse:
+        # Deliberately a generic message — never echoes `exc.detail` (the
+        # configured limit string, e.g. "5 per 1 minute") to the client,
+        # consistent with `handle_unhandled_exception` below never
+        # leaking internal configuration detail.
+        return _error_response(429, "rate_limited", "Too many requests. Please try again later.")
 
     @app.exception_handler(StarletteHTTPException)
     async def handle_http_exception(

@@ -25,6 +25,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.auth.security import hash_password
+from app.core.rate_limit import limiter
 from app.db.session import get_db_session
 from app.main import create_app
 from app.models.appointment import Appointment, AppointmentStatus
@@ -63,6 +64,23 @@ from app.models.workflow import (
 )
 from app.storage.factory import get_document_storage
 from app.storage.local import LocalDocumentStorage
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> None:
+    """Every test starts with a clean rate-limit bucket state.
+
+    `limiter` (`app.core.rate_limit`) is a module-level singleton —
+    `@limiter.limit(...)` decorators are applied once, when
+    `app.api.v1.endpoints.auth`/`agent` are first imported, so its
+    storage is independent of the `app` fixture rebuilding a fresh
+    `FastAPI` instance per test. Without this reset, a test late in the
+    suite could spuriously receive 429 from rate-limit state accumulated
+    by unrelated earlier tests hitting the same endpoint (see
+    `tests/api/test_rate_limiting.py` for the tests that deliberately
+    DO exceed a limit, within a single test, against this clean slate).
+    """
+    limiter.reset()
 
 
 @pytest.fixture()

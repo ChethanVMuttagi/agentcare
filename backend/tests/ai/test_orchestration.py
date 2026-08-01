@@ -228,6 +228,73 @@ async def test_successful_handoff_and_tool_call_persists_full_event_chain(
     assert steps[1].status.value == "completed"
 
 
+async def test_specialist_system_prompt_includes_its_allowed_tools_argument_schema(
+    db_session: AsyncSession,
+    make_organization: MakeOrganization,
+    make_user: MakeUser,
+    make_membership: MakeMembership,
+    make_facility: MakeFacility,
+    make_department: MakeDepartment,
+    make_practitioner: MakePractitioner,
+    make_practitioner_department: MakeAssignment,
+    make_patient: MakePatient,
+) -> None:
+    """Regression coverage: before this, a specialist's system prompt
+    named its tools only in prose, never their actual argument field
+    names — a model had no way to know `check_availability` needs
+    `practitioner_id`/`department_id`/`on_date`/`duration_minutes`
+    exactly, and reliably invented different names instead, which then
+    failed `ToolRegistry.execute`'s validation as `invalid_tool_arguments`
+    every time. See `app.ai.tools.base.describe_tool_arguments` and
+    `AgentOrchestrationService._specialist_system_prompt`."""
+    org, department, practitioner, patient = await _bookable_scenario(
+        db_session,
+        make_organization,
+        make_facility,
+        make_department,
+        make_practitioner,
+        make_practitioner_department,
+        make_patient,
+        "orch-prompt-schema",
+    )
+    admin = await make_user("orch-prompt-schema")
+    await make_membership(org, admin, role=Role.ADMIN)
+
+    provider = FakeLLMProvider(
+        coordinator_decision=HandoffDecision(target_agent=TargetAgent.SCHEDULING),
+        decision=ToolCallDecision(
+            tool_name="book_appointment",
+            arguments={
+                "practitioner_id": str(practitioner.id),
+                "department_id": str(department.id),
+                "start_at": _FUTURE.isoformat(),
+                "duration_minutes": 30,
+                "patient_id": str(patient.id),
+            },
+        ),
+    )
+    orchestration = _orchestration(db_session, provider)
+
+    await orchestration.execute_administrative_request(
+        organization_id=org.id,
+        initiated_by_user_id=admin.id,
+        role=Role.ADMIN,
+        resolved_patient_id=None,
+        request_type=WorkflowRequestType.APPOINTMENT_BOOKING,
+        request_text="Book an appointment",
+    )
+
+    assert len(provider.calls) == 1
+    specialist_prompt = provider.calls[0].system_prompt
+    assert "TOOL: check_availability" in specialist_prompt
+    assert "practitioner_id: string (uuid), required" in specialist_prompt
+    assert "department_id: string (uuid), required" in specialist_prompt
+    assert "on_date: string (date), required" in specialist_prompt
+    assert "duration_minutes: integer, required" in specialist_prompt
+    # The Document specialist's tool must NOT leak into Scheduling's prompt.
+    assert "list_patient_documents" not in specialist_prompt
+
+
 async def test_failed_tool_call_after_handoff_persists_failed_workflow_and_step(
     db_session: AsyncSession,
     make_organization: MakeOrganization,

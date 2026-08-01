@@ -82,5 +82,8 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
 
+      - name: Vitest
+        run: npm test
+
       - name: Build
         run: npm run build

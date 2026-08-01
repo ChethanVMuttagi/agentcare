@@ -337,6 +337,28 @@ or agent workflows exist.
   filesystem-storage/file-signature tests using only temporary
   directories (never a tracked path) — every AI-related test uses a
   deterministic fake LLM provider, never a real network call or API key
+- **Next.js frontend** (`frontend/`): a full Next.js 16 (App Router)
+  staff/admin application covering every backend capability above —
+  dashboard, patients, appointments (with an availability lookup),
+  documents, workflows, human-in-the-loop approvals, an AI Assistant
+  chat, an analytics dashboard, a one-click demo-scenario runner, and a
+  static architecture overview. The backend has no CORS middleware by
+  design: the browser never calls it directly — Server Components and
+  Server Actions call it server-to-server, and the JWT lives only in an
+  `httpOnly` session cookie, never in client-side JavaScript. A single
+  authenticated proxy route (`app/api/backend/[...path]/route.ts`)
+  covers the few genuinely client-side calls (the AI Assistant's live
+  UX, the practitioner available-times lookup, and the workflow event
+  Server-Sent Events stream that drives a real-time agent-execution
+  graph and timeline). See [frontend/README.md](frontend/README.md).
+  **No automated frontend test suite exists yet** — see that document's
+  "Known Limitations".
+- **Continuous Integration** (`.github/workflows/ci.yml`): backend
+  (`ruff`, `mypy`, `alembic upgrade head` against a real Postgres service
+  container, `pytest`) and frontend (`eslint`, `tsc --noEmit`,
+  `next build`) checks run on every push/PR to `main`; either job failing
+  blocks merge. This is CI only — there is no CD/deployment automation
+  yet (see "Not yet implemented" below).
 
 **Not yet implemented** (planned, across future stories):
 - A CRUD API, service, and repository layer for `Organization`/`Facility`
@@ -399,9 +421,15 @@ or agent workflows exist.
 - A second real LLM provider (Groq / OpenAI) — the provider abstraction
   supports adding one without touching the decision/safety/tool layers,
   but only Anthropic is implemented so far
-- Next.js frontend
-- Docker/containerization
-- CI/CD workflows
+- Docker/containerization and any CD/deployment pipeline — CI (lint,
+  type-check, test, build on every push/PR) is implemented; nothing
+  currently builds a container image or deploys anywhere
+- An automated frontend test suite (unit, component, or end-to-end) — see
+  [frontend/README.md](frontend/README.md) "Known Limitations"
+- Rate limiting on any backend endpoint (including `/auth/token` and
+  `/agent/execute`)
+- A pinned backend dependency lockfile, and dependency/secret scanning in
+  CI
 
 Nothing in the sections below describes code that exists yet unless it's
 explicitly listed above as implemented. Where this document discusses
@@ -455,8 +483,9 @@ recommendation, or any function that constitutes the practice of medicine.
 | Notification Delivery | `app/notifications/` (`NotificationProvider` abstraction) | Implemented — `ConsoleNotificationProvider` only; email/SMS/WhatsApp planned as new adapters |
 | Human-in-the-Loop Approvals | `app/services/approval.py`, `app/api/v1/endpoints/approvals.py` | Implemented — Coordinator-triggered or manually-raised workflow pause/resume; see [ADR-0013](docs/adr/ADR-0013-human-in-the-loop-approvals.md). No background expiry sweep — expiration is lazy only |
 | Workflow Templates | `app/workflows/templates.py`, `app/services/patient_registration.py` | Implemented — 4 declarative templates (Patient Registration, Appointment Booking/Rescheduling, Document Collection); Coordinator clarification-pause/resume; see [ADR-0014](docs/adr/ADR-0014-end-to-end-administrative-workflows.md) |
-| Frontend | Next.js | Planned |
-| Containerization | Docker | Planned |
+| Frontend | Next.js 16 (App Router), React 19, TypeScript (strict), Tailwind CSS v4 | Implemented — see [frontend/README.md](frontend/README.md). No automated test suite yet |
+| CI | GitHub Actions (`.github/workflows/ci.yml`) | Implemented — backend (`ruff`/`mypy`/`pytest` against real PostgreSQL) and frontend (`eslint`/`tsc`/`next build`) on every push/PR to `main` |
+| Containerization / CD | Docker, deployment pipeline | Planned |
 
 The database layer is implemented and tested, but scoped narrowly:
 `organizations`, `facilities`, `users`, `organization_memberships`,
@@ -496,7 +525,19 @@ agentcare/
 │   ├── alembic.ini
 │   ├── tests/            # Backend test suite
 │   └── pyproject.toml    # Backend dependencies + tool configuration
-├── frontend/            # Next.js application (not yet implemented)
+├── frontend/            # Next.js 16 application — see frontend/README.md
+│   ├── app/              # Routes (App Router): login, and every org-scoped
+│   │                     # page (dashboard, patients, appointments, documents,
+│   │                     # workflows, approvals, assistant, analytics, demo,
+│   │                     # architecture) under app/org/[organizationId]/
+│   ├── components/       # ui/ (design-system primitives), layout/ (shell/nav)
+│   ├── features/         # One folder per domain: Server Actions + components
+│   ├── services/         # Thin per-resource backend-fetch wrappers
+│   ├── hooks/            # SSE stream, notification polling, reveal animations
+│   ├── lib/               # Session/config/fetch/formatting utilities
+│   ├── types/api.ts      # Hand-maintained mirror of the backend's Pydantic schemas
+│   ├── .env.local.example  # Frontend environment variable template
+│   └── package.json
 ├── docs/                # Project documentation, see docs/README.md
 │   ├── ARCHITECTURE.md   # Current + planned backend architecture
 │   ├── DATABASE.md        # Database foundation: engine, sessions, migrations
@@ -511,10 +552,11 @@ agentcare/
 ├── scripts/             # Developer/operational scripts (not yet implemented)
 ├── tests/               # Cross-cutting/integration tests (not yet implemented)
 ├── .github/
-│   ├── workflows/       # CI/CD workflows (not yet added)
+│   ├── workflows/ci.yml # CI: backend (ruff/mypy/pytest) + frontend (eslint/tsc/build)
 │   └── pull_request_template.md
-├── .env.example         # Safe, placeholder-only environment template
+├── .env.example         # Safe, placeholder-only backend environment template
 ├── .gitignore
+├── LICENSE               # MIT
 ├── SECURITY.md
 ├── CONTRIBUTING.md
 └── README.md
@@ -635,6 +677,34 @@ ruff check .
 mypy app
 ```
 
+## Frontend Setup (Local Development)
+
+Requires **Node.js 22** (matches `.github/workflows/ci.yml`) and a backend
+running per the steps above.
+
+```powershell
+cd frontend
+npm install
+copy .env.local.example .env.local   # both variables already default to
+                                      # values that work against a locally
+                                      # running backend
+npm run dev
+```
+
+The app runs at `http://localhost:3000`. See
+[frontend/README.md](frontend/README.md) for the frontend's architecture
+(it's a backend-for-frontend: the browser never calls the FastAPI backend
+directly), directory layout, and known limitations — most notably, **no
+automated frontend test suite exists yet**.
+
+Lint/typecheck/build from `frontend/` (the same checks CI runs):
+
+```powershell
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
 ## Security Warning
 
 **This is a public repository.** Never commit `.env` files, API keys,
@@ -666,3 +736,7 @@ work, the repository is deliberately structured and documented as a
 production-oriented foundation rather than a throwaway hackathon
 submission — the goal is for it to remain a sound base for continued
 development afterward.
+
+## License
+
+[MIT](LICENSE).

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { hasInvalidPathSegment, isAllowedProxyPath } from "@/app/api/backend/proxy-validation";
 import { config } from "@/lib/config";
 import { getSession } from "@/lib/session";
 
@@ -30,6 +31,15 @@ import { getSession } from "@/lib/session";
  * returned as-is here — Next.js does not buffer a `ReadableStream`
  * response body, so `text/event-stream` chunks reach the browser as the
  * backend emits them, not all at once at the end.
+ *
+ * Sprint 2: `path` is validated against `proxy-validation.ts` before
+ * anything else — a `.`/`..`/empty segment (400) closes off the path-
+ * traversal escape a naive `new URL(base + "/" + path.join("/"))` is
+ * otherwise vulnerable to (e.g. `["..","..","admin"]` collapsing past
+ * the intended `/api/v1` prefix), and an explicit allowlist (403) keeps
+ * this proxy confined to the three routes it actually exists for, even
+ * though the real bearer token would make any other backend path
+ * reachable too — see that module's docstring.
  */
 async function proxyToBackend(request: NextRequest, path: string[]): Promise<NextResponse> {
   const session = await getSession();
@@ -37,6 +47,25 @@ async function proxyToBackend(request: NextRequest, path: string[]): Promise<Nex
     return NextResponse.json(
       { error: { code: "unauthorized", message: "Not signed in." } },
       { status: 401 },
+    );
+  }
+
+  if (hasInvalidPathSegment(path)) {
+    return NextResponse.json(
+      { error: { code: "invalid_path", message: "Invalid path segment." } },
+      { status: 400 },
+    );
+  }
+
+  if (!isAllowedProxyPath(path)) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "forbidden_path",
+          message: "This path is not permitted through the proxy.",
+        },
+      },
+      { status: 403 },
     );
   }
 

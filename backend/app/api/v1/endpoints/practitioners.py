@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_roles
+from app.core.pagination import MAX_PAGE_SIZE
 from app.db.session import get_db_session
 from app.models.membership import OrganizationMembership, Role
 from app.schemas.appointment import AvailableTimeSlotResponse, AvailableTimesResponse
@@ -73,8 +74,8 @@ async def list_practitioners(
     organization_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     _membership: Annotated[OrganizationMembership, Depends(_require_staff_access)],
-    limit: int = 50,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> PractitionerListResponse:
     """List practitioners in this organization. ADMIN/STAFF only."""
     service = PractitionerService(session)
@@ -157,8 +158,8 @@ async def list_availability(
     practitioner_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     _membership: Annotated[OrganizationMembership, Depends(_require_staff_access)],
-    limit: int = 50,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AvailabilityListResponse:
     """List a practitioner's recurring availability windows.
     ADMIN/STAFF only. 404s (via `PractitionerService.get_practitioner`)

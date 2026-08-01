@@ -128,6 +128,30 @@ def test_llm_api_key_is_masked_in_repr() -> None:
     assert "synthetic-test-llm-key" not in str(settings)
 
 
+def test_rate_limit_defaults_are_reasonable() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.rate_limit_auth_token == "5/minute"
+    assert settings.rate_limit_agent_execute == "20/minute"
+
+
+def test_rate_limits_are_configurable() -> None:
+    settings = Settings(
+        _env_file=None, rate_limit_auth_token="10/hour", rate_limit_agent_execute="1/second"
+    )
+    assert settings.rate_limit_auth_token == "10/hour"
+    assert settings.rate_limit_agent_execute == "1/second"
+
+
+def test_blank_rate_limit_auth_token_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rate_limit_auth_token="   ")
+
+
+def test_blank_rate_limit_agent_execute_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rate_limit_agent_execute="")
+
+
 def test_llm_timeout_must_be_positive_and_bounded() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, llm_timeout_seconds=0)

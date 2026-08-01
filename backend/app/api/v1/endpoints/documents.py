@@ -27,12 +27,13 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_roles
 from app.core.config import Settings, get_settings
+from app.core.pagination import MAX_PAGE_SIZE
 from app.db.session import get_db_session
 from app.models.membership import OrganizationMembership, Role
 from app.models.patient_document import DocumentType
@@ -129,8 +130,8 @@ async def list_documents(
     current_user: Annotated[User, Depends(get_current_user)],
     settings: Annotated[Settings, Depends(get_settings)],
     storage: Annotated[DocumentStorage, Depends(get_document_storage)],
-    limit: int = 50,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> DocumentListResponse:
     """List a patient's documents. ADMIN/STAFF: any patient in the
     organization. PATIENT: only their own — this route is always

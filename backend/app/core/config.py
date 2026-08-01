@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # --- Frontend ------------------------------------------------------------------
     frontend_url: str | None = None
 
+    # --- Rate limiting (Sprint 2) --------------------------------------------------
+    # `slowapi`/`limits` rate-limit strings (e.g. "5/minute", "100/hour") —
+    # see app.core.rate_limit. Applied to the two endpoints sensitive or
+    # expensive enough to need it: POST /auth/token (credential-stuffing
+    # exposure) and POST .../agent/execute (each call invokes a real,
+    # billed LLM provider).
+    rate_limit_auth_token: str = "5/minute"
+    rate_limit_agent_execute: str = "20/minute"
+
     # --- Document storage (STORY-008) -----------------------------------------------
     # "local" is the only backend implemented in this story — a filesystem-backed
     # `LocalDocumentStorage` intended for local development only (see
@@ -147,6 +156,14 @@ class Settings(BaseSettings):
             raise ValueError("LLM_TIMEOUT_SECONDS must be between 0 (exclusive) and 120 seconds.")
         if not (0 < self.llm_max_output_tokens <= 8192):
             raise ValueError("LLM_MAX_OUTPUT_TOKENS must be between 1 and 8192.")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_rate_limits(self) -> Settings:
+        if not self.rate_limit_auth_token.strip():
+            raise ValueError("RATE_LIMIT_AUTH_TOKEN must not be blank.")
+        if not self.rate_limit_agent_execute.strip():
+            raise ValueError("RATE_LIMIT_AGENT_EXECUTE must not be blank.")
         return self
 
     @model_validator(mode="after")

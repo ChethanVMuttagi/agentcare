@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agents.definitions import get_agent_registry
@@ -32,6 +32,7 @@ from app.ai.providers.factory import get_llm_provider
 from app.ai.tools.registry import ToolRegistry
 from app.ai.tools.registry_builder import get_full_tool_registry
 from app.auth.dependencies import get_current_user, require_roles
+from app.core.rate_limit import agent_execute_rate_limit, limiter
 from app.db.session import get_db_session
 from app.models.membership import OrganizationMembership, Role
 from app.models.user import User
@@ -66,7 +67,9 @@ async def _resolve_request_patient_id(
 
 
 @router.post("/execute", response_model=AgentExecuteResponse, status_code=201)
+@limiter.limit(agent_execute_rate_limit)
 async def execute_administrative_request(
+    request: Request,
     organization_id: uuid.UUID,
     payload: AgentExecuteRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -84,6 +87,10 @@ async def execute_administrative_request(
     which case an existing, clarification-paused run is resumed instead
     (STORY-015) — see
     `app.ai.orchestration.AgentOrchestrationService.execute_administrative_request`.
+
+    Rate limited (Sprint 2: `RATE_LIMIT_AGENT_EXECUTE`, see
+    `app.core.rate_limit`) — every call invokes a real, billed LLM
+    provider.
     """
     resolved_patient_id = await _resolve_request_patient_id(
         session,

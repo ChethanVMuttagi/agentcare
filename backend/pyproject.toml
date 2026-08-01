@@ -26,11 +26,22 @@ dependencies = [
     # see app/api/v1/endpoints/documents.py. Pure-Python, no OS-level
     # dependency.
     "python-multipart>=0.0.12,<1.0",
-    # Official Anthropic SDK — the one real LLM provider implemented in
+    # Official Anthropic SDK — the first real LLM provider implemented in
     # STORY-010 (see app/ai/providers/anthropic_provider.py). A direct
     # provider adapter, not LangChain/LangGraph — see
     # docs/adr/ADR-0010-llm-and-tool-security-boundary.md.
     "anthropic>=0.40,<1.0",
+    # Was already an install-time transitive dependency of `anthropic`
+    # (which uses it as its own HTTP client) — declared directly here
+    # because app/ai/providers/groq_provider.py now imports and uses it
+    # itself, to call Groq's OpenAI-compatible REST API without adding a
+    # second vendor SDK.
+    "httpx>=0.27,<1.0",
+    # Rate limiting (Sprint 2) — see app/core/rate_limit.py. In-memory
+    # storage (the `limits` package's default): this process is a single
+    # instance with no shared cache, the same posture the reminder engine
+    # already has ("the database IS the queue" — no Redis dependency).
+    "slowapi>=0.1.10,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +54,11 @@ dev = [
     "aiosqlite>=0.20,<1.0",
     "ruff>=0.7,<1.0",
     "mypy>=1.13,<2.0",
+    # Coverage measurement + enforcement (Sprint 3) — see
+    # [tool.coverage.*] below and .github/workflows/ci.yml.
+    "pytest-cov>=5.0,<7.0",
+    # Property-based testing (Sprint 3) — see tests/*/test_*_properties.py.
+    "hypothesis>=6.100,<7.0",
 ]
 
 [build-system]
@@ -56,6 +72,24 @@ include = ["app*"]
 testpaths = ["tests"]
 addopts = "-ra"
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["app"]
+
+[tool.coverage.report]
+# Measured baseline (Sprint 3) was 94% with the full real-PostgreSQL
+# suite; 90% leaves real headroom for normal fluctuation while still
+# being a genuinely enforced floor, not a rubber-stamped one. The
+# lowest-covered module today (`app/workers/reminder_worker.py`, 84%)
+# is a disclosed, deliberate gap — its `run_forever` poll loop isn't
+# exercised by the test suite; see that module's own docstring.
+fail_under = 90
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.$",
+]
 
 [tool.ruff]
 line-length = 100

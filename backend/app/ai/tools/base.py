@@ -107,3 +107,45 @@ class ToolDefinition:
     category: ToolCategory
     input_schema: type[BaseModel]
     handler: ToolHandler
+
+
+def _describe_field_type(field_schema: dict[str, Any]) -> str:
+    """Render one JSON Schema property's type as short plain text —
+    handles the plain `{"type": ...}` case and the `anyOf` shape Pydantic
+    emits for `X | None` fields (e.g. `BookAppointmentArguments.patient_id`)."""
+    if "type" in field_schema:
+        json_type = field_schema["type"]
+        format_ = field_schema.get("format")
+        return f"{json_type} ({format_})" if format_ else str(json_type)
+    if "anyOf" in field_schema:
+        return " or ".join(_describe_field_type(option) for option in field_schema["anyOf"])
+    return "any"
+
+
+def describe_tool_arguments(tool: ToolDefinition) -> str:
+    """Render `tool`'s name, description, and exact argument field names/
+    types as plain text, for inclusion in a specialist's system prompt.
+
+    A `ToolCallDecision.arguments` is produced by the model as free-form
+    JSON (see `app.ai.decisions` — only the OUTER decision envelope is a
+    forced structured tool call; a specific tool's OWN argument shape is
+    never itself presented to the model as a schema). Without this text,
+    a model has only `tool.description`'s prose to guess argument names
+    from, and reliably guesses plausible-sounding names
+    (`"doctor"`/`"department"`/`"date"`) instead of the tool's actual,
+    `extra="forbid"` field names (`practitioner_id`/`department_id`/
+    `on_date`) — every such guess fails `input_schema` validation once
+    `ToolRegistry.execute` re-validates it. See docs/TOOLS.md "Scheduling
+    Tool Argument Schema"."""
+    schema = tool.input_schema.model_json_schema()
+    required = set(schema.get("required", []))
+    lines = [
+        f"TOOL: {tool.name}",
+        f"  {tool.description}",
+        "  Arguments — use exactly these field names, spelled exactly as shown:",
+    ]
+    for field_name, field_schema in schema.get("properties", {}).items():
+        type_desc = _describe_field_type(field_schema)
+        requiredness = "required" if field_name in required else "optional"
+        lines.append(f"    - {field_name}: {type_desc}, {requiredness}")
+    return "\n".join(lines)

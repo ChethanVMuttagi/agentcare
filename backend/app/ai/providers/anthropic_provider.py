@@ -72,8 +72,10 @@ def _coordinator_decision_tool() -> dict[str, Any]:
 class AnthropicProvider:
     """`LLMProvider` implementation backed by `anthropic.AsyncAnthropic`.
 
-    Constructed once per request in this story (no connection pooling
-    concerns beyond what the SDK's own `httpx` client already handles).
+    Sprint 2: constructed ONCE for the process lifetime — see
+    `app.ai.providers.factory.get_llm_provider` (a shared, cached
+    singleton, no longer built fresh per request) and `aclose()` below,
+    called exactly once at application shutdown (`app.main.lifespan`).
     `api_key` is a plain `str` here — the caller (see
     `app.ai.providers.factory`) is responsible for extracting it from a
     `SecretStr` exactly once, at the point of construction; this class
@@ -90,6 +92,9 @@ class AnthropicProvider:
         self._model = model
         self._max_output_tokens = max_output_tokens
         self._client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout_seconds)
+
+    async def aclose(self) -> None:
+        await self._client.close()
 
     async def _request_structured(
         self, request: StructuredCompletionRequest, *, tool: dict[str, Any], tool_name: str

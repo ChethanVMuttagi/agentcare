@@ -12,10 +12,11 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_roles
+from app.core.pagination import MAX_PAGE_SIZE
 from app.db.session import get_db_session
 from app.models.membership import OrganizationMembership, Role
 from app.schemas.department import DepartmentCreate, DepartmentListResponse, DepartmentResponse
@@ -50,8 +51,8 @@ async def list_departments(
     organization_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     _membership: Annotated[OrganizationMembership, Depends(_require_staff_access)],
-    limit: int = 50,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> DepartmentListResponse:
     """List departments in this organization. ADMIN/STAFF only."""
     service = DepartmentService(session)

@@ -69,3 +69,11 @@ class LLMProvider(Protocol):
         Raises the same controlled exceptions as `generate_structured`.
         """
         ...
+
+    async def aclose(self) -> None:
+        """Release this provider's underlying HTTP client/connection
+        pool. Called exactly once, at application shutdown, on the one
+        shared instance `app.ai.providers.factory.get_llm_provider`
+        returns (Sprint 2) — see `app.main.lifespan`. Implementations
+        with nothing to release (e.g. a test fake) may no-op."""
+        ...

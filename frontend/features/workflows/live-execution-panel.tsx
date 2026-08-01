@@ -6,7 +6,7 @@ import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Timeline } from "@/features/workflows/timeline";
 import { WorkflowGraph } from "@/features/workflows/workflow-graph";
 import { useWorkflowEventStream, type EventStreamConnectionState } from "@/hooks/use-workflow-event-stream";
-import type { WorkflowStatus, WorkflowStreamEntry } from "@/types/api";
+import type { WorkflowStatus, WorkflowStepResponse, WorkflowStreamEntry } from "@/types/api";
 
 const TERMINAL_STATUSES = new Set<WorkflowStatus>(["completed", "failed", "cancelled"]);
 
@@ -26,11 +26,17 @@ export function LiveExecutionPanel({
   workflowId,
   initialEntries,
   initialStatus,
+  initialSteps,
 }: {
   organizationId: string;
   workflowId: string;
   initialEntries: WorkflowStreamEntry[];
   initialStatus: WorkflowStatus;
+  /** The sibling step list, when the caller already fetched it (see
+   * `services/workflows.ts#listWorkflowSteps`) — gives the Timeline exact
+   * per-step duration and attempt counts instead of deriving what it can
+   * from the event timestamps alone. */
+  initialSteps?: WorkflowStepResponse[];
 }) {
   const alreadyTerminal = TERMINAL_STATUSES.has(initialStatus);
   const {
@@ -59,7 +65,7 @@ export function LiveExecutionPanel({
       <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
         <WorkflowGraph entries={entries} isRunning={isRunning} />
       </div>
-      <Timeline entries={entries} />
+      <Timeline entries={entries} steps={initialSteps} />
     </div>
   );
 }

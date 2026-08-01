@@ -36,11 +36,12 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_roles
 from app.core.exceptions import AppException
+from app.core.pagination import MAX_PAGE_SIZE
 from app.db.session import get_db_session
 from app.models.membership import OrganizationMembership, Role
 from app.models.user import User
@@ -178,8 +179,8 @@ async def list_appointments(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     membership: Annotated[OrganizationMembership, Depends(_require_any_access)],
     current_user: Annotated[User, Depends(get_current_user)],
-    limit: int = 50,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AppointmentListResponse:
     """List appointments. ADMIN/STAFF: organization-wide. PATIENT: their
     own appointments only — never the organization-wide list (see the

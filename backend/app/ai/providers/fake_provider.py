@@ -151,6 +151,10 @@ class FakeLLMProvider:
             "configured for this test."
         )
 
+    async def aclose(self) -> None:
+        """Nothing to release — no real HTTP client exists here."""
+        return None
+
 
 class AlwaysUnavailableFakeLLMProvider:
     """A `FakeLLMProvider` variant dedicated to simulating "the provider
@@ -168,3 +172,7 @@ class AlwaysUnavailableFakeLLMProvider:
         self, request: StructuredCompletionRequest
     ) -> CoordinatorDecision:
         raise ProviderUnavailableError("The configured LLM provider is unavailable.")
+
+    async def aclose(self) -> None:
+        """Nothing to release — no real HTTP client exists here."""
+        return None

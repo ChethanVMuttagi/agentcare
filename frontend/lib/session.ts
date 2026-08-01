@@ -8,7 +8,7 @@ import type { Role } from "@/types/api";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8; // 8 hours — matches typical backend JWT lifetime order of magnitude; the backend's own `exp` claim is still the real, enforced expiry.
 
 /**
- * Session cookie strategy (see docs/FRONTEND.md "Authentication"):
+ * Session cookie strategy:
  *
  * The backend JWT is stored ONLY in an httpOnly cookie — never in
  * localStorage, never sent to the browser as readable JS state. Every

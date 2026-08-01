@@ -36,8 +36,10 @@ A change is **DONE** only when all of the following are true:
   attack surface.
 - **Documented** — relevant docs in [docs/](docs/README.md) are added or
   updated; ADRs are written for architecturally significant decisions.
-- **CI Passing** — once CI exists (introduced in a later story), it must be
-  green.
+- **CI Passing** — every check in [`.github/workflows/`](.github/workflows/)
+  is green: backend lint/type-check/tests (with coverage), frontend
+  lint/type-check/unit tests (with coverage)/build, end-to-end (Playwright)
+  tests, dependency/secret scanning, and CodeQL analysis.
 
 Implemented + Tested + Integrated + Security Checked + Documented + CI
 Passing = **DONE**. A change missing any of these is not done, regardless
@@ -45,11 +47,17 @@ of how complete the code looks.
 
 ## Tests Required
 
-- New functionality includes tests appropriate to its layer (unit,
-  integration, etc. as those layers come online).
+- New functionality includes tests appropriate to its layer: backend unit/
+  integration tests (`backend/tests/`), frontend unit tests (`frontend/**/*.test.ts(x)`,
+  run via `npm test`/`npm run test:coverage`), and, for a change that
+  touches a user-facing flow, a Playwright end-to-end test
+  (`frontend/e2e/`) covering it.
 - Bug fixes include a test that reproduces the bug and passes once fixed,
   where practical.
 - Tests use synthetic data only — see [SECURITY.md](SECURITY.md) Section 7.
+- Coverage thresholds (`pyproject.toml`'s `[tool.coverage.report]` for the
+  backend, `vitest.config.mts`'s `test.coverage.thresholds` for the
+  frontend) must not regress.
 
 ## Documentation Required
 

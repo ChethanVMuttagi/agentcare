@@ -16,8 +16,8 @@ export async function getCurrentUser(token: string): Promise<CurrentUserResponse
 
 /**
  * The backend has no endpoint that returns a user's organization
- * memberships/roles (see docs/FRONTEND.md "Known Backend Gap"), so this
- * app asks for the organization id and a role hint directly at login
+ * memberships/roles, so this app asks for the organization id and a
+ * role hint directly at login
  * and verifies BOTH by attempting one real, role-appropriate GET call —
  * never a fabricated/local check. A 200 means the org id is real and
  * this user genuinely has SOME active membership compatible with the

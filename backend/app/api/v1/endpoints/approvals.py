@@ -23,10 +23,11 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_roles
+from app.core.pagination import MAX_PAGE_SIZE
 from app.db.session import get_db_session
 from app.models.membership import OrganizationMembership, Role
 from app.models.user import User
@@ -72,8 +73,8 @@ async def list_approvals(
     organization_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     membership: Annotated[OrganizationMembership, Depends(_require_view_access)],
-    limit: int = 50,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ApprovalRequestListResponse:
     """List the organization's actionable approval queue — `PENDING`
     approvals only, oldest first."""
