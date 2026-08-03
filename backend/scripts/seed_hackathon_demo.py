@@ -45,8 +45,8 @@ from app.ai.providers.fake_provider import FakeLLMProvider
 from app.ai.tools.registry_builder import build_full_tool_registry
 from app.core.config import Settings
 from app.db.session import build_engine
-from app.models.approval import ApprovalType
 from app.models.appointment import Appointment, AppointmentStatus
+from app.models.approval import ApprovalType
 from app.models.department import Department
 from app.models.facility import Facility, FacilityType
 from app.models.membership import Role
@@ -174,7 +174,9 @@ async def main() -> None:
             practitioners.append(practitioner)
         await session.flush()
 
-        for practitioner, (_first, _last, _ptype, dept) in zip(practitioners, practitioners_spec):
+        for practitioner, (_first, _last, _ptype, dept) in zip(
+            practitioners, practitioners_spec, strict=True
+        ):
             session.add(
                 PractitionerDepartment(
                     organization_id=org.id, practitioner_id=practitioner.id, department_id=dept.id
@@ -188,7 +190,9 @@ async def main() -> None:
         # `fk_practitioner_availability_assignment`).
         await session.flush()
 
-        for practitioner, (_first, _last, _ptype, dept) in zip(practitioners, practitioners_spec):
+        for practitioner, (_first, _last, _ptype, dept) in zip(
+            practitioners, practitioners_spec, strict=True
+        ):
             for day in (
                 DayOfWeek.MONDAY,
                 DayOfWeek.TUESDAY,
@@ -268,7 +272,10 @@ async def main() -> None:
             f"({len(registration_candidates)} via Patient Registration workflow, "
             f"{len(direct_candidates)} direct)."
         )
-        print(f"  Patient Registration workflow ids: {[str(i) for i in registration_workflow_ids]}\n")
+        print(
+            f"  Patient Registration workflow ids: "
+            f"{[str(i) for i in registration_workflow_ids]}\n"
+        )
 
         # --- 3. Appointments -------------------------------------------
         appointment_service = AppointmentService(session)
@@ -432,7 +439,9 @@ async def main() -> None:
             "I need to reschedule — something came up.",
             "Please push my appointment back a few hours.",
         ]
-        for i, (appointment, prompt) in enumerate(zip(reschedule_targets, reschedule_prompts)):
+        for i, (appointment, prompt) in enumerate(
+            zip(reschedule_targets, reschedule_prompts, strict=True)
+        ):
             new_start = appointment.start_at + timedelta(hours=2)
             provider = FakeLLMProvider(
                 coordinator_decision=HandoffDecision(target_agent=TargetAgent.SCHEDULING),
@@ -463,7 +472,9 @@ async def main() -> None:
             "I want to check what paperwork is still outstanding.",
             "Can you confirm my insurance documents were received?",
         ]
-        for i, (patient, prompt) in enumerate(zip(doc_collection_patients, doc_prompts)):
+        for i, (patient, prompt) in enumerate(
+            zip(doc_collection_patients, doc_prompts, strict=True)
+        ):
             provider = FakeLLMProvider(
                 coordinator_decision=HandoffDecision(target_agent=TargetAgent.DOCUMENT),
                 decision=ToolCallDecision(
@@ -540,10 +551,16 @@ async def main() -> None:
             (ApprovalType.CUSTOM, "Patient details could not be confidently matched."),
             (ApprovalType.APPOINTMENT_OVERRIDE, "Requested slot conflicts with a blackout window."),
             (ApprovalType.HIGH_RISK_ACTION, "Second opinion requested before proceeding."),
-            (ApprovalType.MANUAL_RESCHEDULE, "Caller requested an out-of-policy short-notice change."),
+            (
+                ApprovalType.MANUAL_RESCHEDULE,
+                "Caller requested an out-of-policy short-notice change.",
+            ),
             (ApprovalType.CUSTOM, "Possible duplicate patient record detected."),
             (ApprovalType.DOCUMENT_EXCEPTION, "Document exceeds the automatic size threshold."),
-            (ApprovalType.APPOINTMENT_OVERRIDE, "Requested practitioner is over capacity this week."),
+            (
+                ApprovalType.APPOINTMENT_OVERRIDE,
+                "Requested practitioner is over capacity this week.",
+            ),
             (ApprovalType.HIGH_RISK_ACTION, "Unusual request pattern flagged for review."),
             (ApprovalType.CUSTOM, "Low-confidence match against existing patient records."),
         ]
@@ -615,7 +632,11 @@ async def main() -> None:
                 original_filename=filename,
                 stream=_BytesStream(content),
             )
-        print(f"Uploaded {len(document_plan)} documents across {len(set(p.id for p, *_ in document_plan))} patients.\n")
+        distinct_patients = len({p.id for p, *_ in document_plan})
+        print(
+            f"Uploaded {len(document_plan)} documents across "
+            f"{distinct_patients} patients.\n"
+        )
 
         await session.commit()
 

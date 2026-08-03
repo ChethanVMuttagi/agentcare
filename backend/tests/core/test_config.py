@@ -3,8 +3,32 @@ from pydantic import ValidationError
 
 from app.core.config import Environment, Settings
 
+# Every variable a test in this module asserts an "unconfigured" default
+# for. `Settings(_env_file=None)` suppresses `backend/.env` but NOT the
+# process environment, so asserting `... is None` is only honest once
+# these are genuinely absent — CI exports DATABASE_URL (for `alembic
+# upgrade head`) and most developers have several of these exported or in
+# their shell profile.
+_UNCONFIGURED_BY_DEFAULT = (
+    "DATABASE_URL",
+    "JWT_SECRET_KEY",
+    "LLM_PROVIDER",
+    "LLM_MODEL",
+    "LLM_API_KEY",
+)
 
-def test_defaults_are_safe_for_startup() -> None:
+
+@pytest.fixture()
+def unconfigured_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every variable in `_UNCONFIGURED_BY_DEFAULT` from the
+    process environment for the duration of one test, so "the default is
+    None" is tested against a genuinely empty environment rather than
+    whatever the developer/CI runner happens to have set."""
+    for name in _UNCONFIGURED_BY_DEFAULT:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_defaults_are_safe_for_startup(unconfigured_env: None) -> None:
     settings = Settings(_env_file=None)
     assert settings.app_env is Environment.DEVELOPMENT
     assert settings.debug is False
@@ -15,7 +39,7 @@ def test_defaults_are_safe_for_startup() -> None:
     assert settings.jwt_secret_key is None
 
 
-def test_app_starts_without_any_llm_or_database_credentials() -> None:
+def test_app_starts_without_any_llm_or_database_credentials(unconfigured_env: None) -> None:
     # No env vars set: this must not raise, since STORY-001 has no DB/LLM
     # integration and the app must be able to start for health checks/tests.
     settings = Settings(_env_file=None)
@@ -66,7 +90,7 @@ def test_staging_or_production_with_jwt_secret_key_is_accepted() -> None:
         assert settings.app_env is env
 
 
-def test_development_and_test_do_not_require_jwt_secret_key() -> None:
+def test_development_and_test_do_not_require_jwt_secret_key(unconfigured_env: None) -> None:
     for env in (Environment.DEVELOPMENT, Environment.TEST):
         settings = Settings(_env_file=None, app_env=env)
         assert settings.jwt_secret_key is None
@@ -113,7 +137,9 @@ def test_development_and_test_allow_local_document_storage() -> None:
         assert settings.document_storage_backend == "local"
 
 
-def test_llm_defaults_are_safe_for_startup_with_no_key_configured() -> None:
+def test_llm_defaults_are_safe_for_startup_with_no_key_configured(
+    unconfigured_env: None,
+) -> None:
     settings = Settings(_env_file=None)
     assert settings.llm_provider is None
     assert settings.llm_model is None

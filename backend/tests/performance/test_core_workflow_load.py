@@ -26,7 +26,8 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
-from datetime import date, time as dtime, timedelta
+from datetime import date, timedelta
+from datetime import time as dtime
 
 import pytest
 from fastapi import FastAPI

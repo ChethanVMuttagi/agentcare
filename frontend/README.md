@@ -133,16 +133,37 @@ to start.
 ### Available scripts
 
 ```bash
-npm run dev      # start the dev server (Turbopack)
-npm run build    # production build — also runs in CI
-npm run start    # run a production build locally
-npm run lint      # ESLint (eslint-config-next)
+npm run dev            # start the dev server (Turbopack)
+npm run build          # production build — also runs in CI
+npm run start          # run a production build locally
+npm run lint           # ESLint (eslint-config-next)
+npm test               # Vitest unit/component tests
+npm run test:coverage  # Vitest + v8 coverage, enforcing the configured thresholds
+npm run test:e2e       # Playwright end-to-end tests (see below)
 ```
 
-There is no `npm test` script yet — see "Known Limitations" below.
+`npm run test:e2e` starts both servers itself (see `playwright.config.ts`'s
+`webServer`) and, before they are health-checked, applies migrations and
+seeds deterministic data by running `backend/scripts/seed_e2e.py`
+(`e2e/global-setup.ts`). It therefore needs `DATABASE_URL` and
+`JWT_SECRET_KEY` set in the environment, plus a Python interpreter with the
+backend's dependencies installed — point it at a virtualenv with
+`E2E_SEED_PYTHON` if `python` on your `PATH` isn't the right one:
 
-CI (`.github/workflows/ci.yml`) runs `eslint`, `tsc --noEmit`, and
-`next build` on every push/PR to `main`; a red build blocks merge.
+```bash
+DATABASE_URL=postgresql+asyncpg://... JWT_SECRET_KEY=... \
+  E2E_SEED_PYTHON=../backend/.venv/Scripts/python.exe \
+  npm run test:e2e
+```
+
+The AI Assistant and Demo Mode specs assert a real model response **only**
+when `ANTHROPIC_API_KEY` or `GROQ_API_KEY` is set; without one they still
+run every deterministic assertion and skip just that check, so the suite is
+correct with or without a key.
+
+CI runs all of the above on every push/PR to `main`
+(`.github/workflows/ci.yml`), alongside dependency/secret scanning
+(`security.yml`) and CodeQL (`codeql.yml`); a red build blocks merge.
 
 ## The AI Assistant & Live Execution
 
@@ -178,11 +199,16 @@ possible sign this file is out of date.
 
 ## Known Limitations
 
-- **No automated frontend tests exist yet** — no unit, component, or
-  end-to-end test suite. CI currently verifies lint/typecheck/build only.
-  This is a real gap, not an oversight to ignore: treat any nontrivial
-  change to `lib/session.ts`, the `/api/backend` proxy, or a Server Action
-  as needing careful manual verification until test infrastructure exists.
+- **Unit-test coverage is deliberately partial.** Vitest covers the
+  `/api/backend` proxy, the shared hooks/utilities, and the AI Assistant,
+  Timeline, Workflow Graph, Analytics, and Demo Mode features; the
+  patients, appointments, documents, approvals, auth, and dashboard
+  features have **no unit tests** — they are covered end-to-end by
+  `e2e/` (Playwright) instead. The thresholds in `vitest.config.mts` are
+  set just below the real measured number, so they catch regressions
+  without pretending the whole app is unit-tested. `lib/session.ts` and
+  `services/*.ts` in particular are exercised only through E2E, so treat a
+  nontrivial change to either as needing careful manual verification too.
 - `types/api.ts` sync — see above.
 - No client-side error reporting/monitoring integration; runtime errors in
   production are only visible via `console.error` in the error boundaries

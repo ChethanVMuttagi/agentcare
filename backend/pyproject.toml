@@ -59,6 +59,9 @@ dev = [
     "pytest-cov>=5.0,<7.0",
     # Property-based testing (Sprint 3) — see tests/*/test_*_properties.py.
     "hypothesis>=6.100,<7.0",
+    # Dependency vulnerability scanning (Sprint 3) — see
+    # .github/workflows/security.yml.
+    "pip-audit>=2.7,<3.0",
 ]
 
 [build-system]

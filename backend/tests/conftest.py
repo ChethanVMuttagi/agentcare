@@ -25,6 +25,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.auth.security import hash_password
+from app.core.config import Settings
 from app.core.rate_limit import limiter
 from app.db.session import get_db_session
 from app.main import create_app
@@ -64,6 +65,32 @@ from app.models.workflow import (
 )
 from app.storage.factory import get_document_storage
 from app.storage.local import LocalDocumentStorage
+
+
+@pytest.fixture(autouse=True)
+def _ignore_dotenv_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `Settings()` ignore `backend/.env` for the whole test suite.
+
+    CI checks out a tree with no `.env` at all, so CI is the definition of
+    correct here — but a developer running the same tests locally almost
+    always DOES have one (a real `DATABASE_URL`, `LLM_PROVIDER=groq`, and
+    so on). Several tests assert unconfigured-by-default behavior, and
+    `monkeypatch.delenv` alone can't express that: it removes the process
+    environment variable, while `Settings`' own `env_file=".env"` source
+    keeps supplying the value from disk. Those tests would then fail
+    locally for a reason that has nothing to do with the code under test,
+    and the workaround — temporarily moving `.env` aside around a test
+    run — risks leaving a developer's real configuration displaced if the
+    run dies partway.
+
+    Patching `model_config` (a plain dict, restored automatically by
+    monkeypatch) makes local runs behave exactly like CI. Tests that need
+    configuration still set it explicitly, via `monkeypatch.setenv` or
+    `Settings(...)` keyword arguments — both of which take priority over
+    the env file anyway, so nothing that legitimately passes in CI is
+    affected.
+    """
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
 
 
 @pytest.fixture(autouse=True)

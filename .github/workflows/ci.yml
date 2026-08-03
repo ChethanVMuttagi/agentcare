@@ -8,7 +8,7 @@ on:
 
 jobs:
   backend:
-    name: Backend (ruff, mypy, pytest)
+    name: Backend (ruff, mypy, pytest, coverage)
     runs-on: ubuntu-latest
 
     services:
@@ -27,7 +27,12 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql+asyncpg://agentcare:agentcare@localhost:5432/agentcare_ci
+      # Deliberately NOT a job-wide DATABASE_URL: tests that need a real
+      # database read AGENTCARE_TEST_POSTGRES_URL and set DATABASE_URL
+      # themselves via monkeypatch, while several tests assert the
+      # "no database configured" defaults — an ambient DATABASE_URL would
+      # fail those for a reason unrelated to what they check. Only the
+      # migration step below gets it, scoped to that step.
       AGENTCARE_TEST_POSTGRES_URL: postgresql+asyncpg://agentcare:agentcare@localhost:5432/agentcare_ci
 
     defaults:
@@ -52,12 +57,22 @@ jobs:
 
       - name: Apply migrations
         run: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://agentcare:agentcare@localhost:5432/agentcare_ci
 
-      - name: Pytest
-        run: pytest
+      - name: Pytest with coverage
+        run: pytest --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          retention-days: 14
 
   frontend:
-    name: Frontend (lint, typecheck, build)
+    name: Frontend (lint, typecheck, test, coverage, build)
     runs-on: ubuntu-latest
 
     defaults:
@@ -82,8 +97,86 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
 
-      - name: Vitest
-        run: npm test
+      - name: Vitest with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+          retention-days: 14
 
       - name: Build
         run: npm run build
+
+  e2e:
+    name: End-to-end (Playwright)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentcare
+          POSTGRES_PASSWORD: agentcare
+          POSTGRES_DB: agentcare_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentcare"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://agentcare:agentcare@localhost:5432/agentcare_ci
+      JWT_SECRET_KEY: e2e-ci-only-secret-key-not-used-anywhere-else
+      # Passed through from repo secrets when configured; absent/empty
+      # otherwise. `ai-assistant.spec.ts`/`demo-mode.spec.ts` assert a
+      # real AI reply ONLY when one of these is non-empty — every other
+      # assertion in the suite is deterministic and runs regardless. See
+      # docs/ARCHITECTURE.md "Testing Strategy".
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      LLM_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'anthropic' || (secrets.GROQ_API_KEY != '' && 'groq' || '') }}
+      LLM_MODEL: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude-3-5-haiku-20241022' || (secrets.GROQ_API_KEY != '' && 'llama-3.1-8b-instant' || '') }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -e ".[dev]"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        working-directory: frontend
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 14

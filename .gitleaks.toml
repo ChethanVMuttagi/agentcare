@@ -1,0 +1,51 @@
+# Gitleaks configuration — see .github/workflows/security.yml.
+#
+# The default ruleset is kept in full (`useDefault = true`): this file only
+# ADDS narrow allowlist entries for the deliberately-synthetic values this
+# repository already uses by convention, so a genuinely leaked credential is
+# still caught everywhere, including inside tests.
+#
+# Deliberately NOT allowlisted: whole directories. Blanket-ignoring
+# `backend/tests/` or `frontend/` would mean a real key pasted into a test
+# file scans clean — exactly the failure mode this job exists to prevent.
+# Each entry below matches a specific, self-describing value pattern
+# instead.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic, non-production values used by tests, seed scripts, and env templates."
+
+regexes = [
+  # The repo-wide convention for fake credentials in tests — e.g.
+  # "synthetic-test-jwt-secret-do-not-use-in-production-32chars",
+  # "synthetic-test-secret-value", "synthetic-test-llm-key".
+  '''synthetic-[A-Za-z0-9._-]*''',
+  # The fixed admin password for the disposable E2E database — see
+  # backend/scripts/seed_e2e.py and frontend/e2e/seed-constants.ts. Seeds
+  # an ephemeral CI container / local dev database only, never a
+  # deployed environment.
+  '''E2E-test-password-1!''',
+  # Placeholder values in the committed environment templates, which exist
+  # precisely so nobody has to guess at real ones.
+  '''changeme[A-Za-z0-9._-]*''',
+  '''your-[A-Za-z0-9._-]*-here''',
+  # Document STORAGE OBJECT KEYS — `f"{organization_id.hex}/{uuid4().hex}"`,
+  # the opaque two-level path `app.services.document` generates (see
+  # backend/tests/storage/test_local_storage.py). A filesystem path, not a
+  # credential; the generic-api-key rule only flags it because the local
+  # variable holding it is spelled `key`. The `/` between two fixed-length
+  # hex segments is what makes this shape unmistakable.
+  '''[0-9a-f]{32}/[0-9a-f]{32}''',
+]
+
+paths = [
+  # Committed templates: placeholders only, by design (real `.env` /
+  # `.env.local` files are gitignored — see .gitignore and SECURITY.md).
+  '''\.env\.example$''',
+  '''\.env\.local\.example$''',
+  # Lockfiles: integrity hashes and registry URLs, no credentials, and
+  # high enough entropy to trip generic rules constantly.
+  '''package-lock\.json$''',
+]

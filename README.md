@@ -351,14 +351,18 @@ or agent workflows exist.
   UX, the practitioner available-times lookup, and the workflow event
   Server-Sent Events stream that drives a real-time agent-execution
   graph and timeline). See [frontend/README.md](frontend/README.md).
-  **No automated frontend test suite exists yet** — see that document's
-  "Known Limitations".
-- **Continuous Integration** (`.github/workflows/ci.yml`): backend
+  Tested with Vitest (unit/component) and Playwright (end-to-end); see
+  that document for exactly which areas each covers.
+- **Continuous Integration** (`.github/workflows/`): `ci.yml` runs backend
   (`ruff`, `mypy`, `alembic upgrade head` against a real Postgres service
-  container, `pytest`) and frontend (`eslint`, `tsc --noEmit`,
-  `next build`) checks run on every push/PR to `main`; either job failing
-  blocks merge. This is CI only — there is no CD/deployment automation
-  yet (see "Not yet implemented" below).
+  container, `pytest` with an enforced coverage threshold), frontend
+  (`eslint`, `tsc --noEmit`, Vitest with coverage thresholds,
+  `next build`), and end-to-end (Playwright, against both servers and a
+  seeded database) checks on every push/PR to `main`; `security.yml` adds
+  dependency vulnerability scanning (`pip-audit`, `npm audit`) and secret
+  scanning (gitleaks), and `codeql.yml` adds CodeQL analysis for Python
+  and TypeScript. Any job failing blocks merge. This is CI only — there is
+  no CD/deployment automation yet (see "Not yet implemented" below).
 
 **Not yet implemented** (planned, across future stories):
 - A CRUD API, service, and repository layer for `Organization`/`Facility`
@@ -418,18 +422,15 @@ or agent workflows exist.
 - A general-purpose security/compliance audit system (distinct from
   `WorkflowEvent`'s own workflow-lifecycle audit trail — see
   [docs/WORKFLOWS.md](docs/WORKFLOWS.md) Section 18)
-- A second real LLM provider (Groq / OpenAI) — the provider abstraction
-  supports adding one without touching the decision/safety/tool layers,
-  but only Anthropic is implemented so far
+- A third LLM provider (OpenAI) — the provider abstraction supports adding
+  one without touching the decision/safety/tool layers; Anthropic and Groq
+  are implemented
 - Docker/containerization and any CD/deployment pipeline — CI (lint,
-  type-check, test, build on every push/PR) is implemented; nothing
-  currently builds a container image or deploys anywhere
-- An automated frontend test suite (unit, component, or end-to-end) — see
-  [frontend/README.md](frontend/README.md) "Known Limitations"
-- Rate limiting on any backend endpoint (including `/auth/token` and
-  `/agent/execute`)
-- A pinned backend dependency lockfile, and dependency/secret scanning in
-  CI
+  type-check, test with coverage thresholds, end-to-end, build, security
+  scanning on every push/PR) is implemented; nothing currently builds a
+  container image or deploys anywhere
+- A pinned backend dependency lockfile (dependency and secret scanning in
+  CI are implemented — see `.github/workflows/security.yml`)
 
 Nothing in the sections below describes code that exists yet unless it's
 explicitly listed above as implemented. Where this document discusses
@@ -483,8 +484,8 @@ recommendation, or any function that constitutes the practice of medicine.
 | Notification Delivery | `app/notifications/` (`NotificationProvider` abstraction) | Implemented — `ConsoleNotificationProvider` only; email/SMS/WhatsApp planned as new adapters |
 | Human-in-the-Loop Approvals | `app/services/approval.py`, `app/api/v1/endpoints/approvals.py` | Implemented — Coordinator-triggered or manually-raised workflow pause/resume; see [ADR-0013](docs/adr/ADR-0013-human-in-the-loop-approvals.md). No background expiry sweep — expiration is lazy only |
 | Workflow Templates | `app/workflows/templates.py`, `app/services/patient_registration.py` | Implemented — 4 declarative templates (Patient Registration, Appointment Booking/Rescheduling, Document Collection); Coordinator clarification-pause/resume; see [ADR-0014](docs/adr/ADR-0014-end-to-end-administrative-workflows.md) |
-| Frontend | Next.js 16 (App Router), React 19, TypeScript (strict), Tailwind CSS v4 | Implemented — see [frontend/README.md](frontend/README.md). No automated test suite yet |
-| CI | GitHub Actions (`.github/workflows/ci.yml`) | Implemented — backend (`ruff`/`mypy`/`pytest` against real PostgreSQL) and frontend (`eslint`/`tsc`/`next build`) on every push/PR to `main` |
+| Frontend | Next.js 16 (App Router), React 19, TypeScript (strict), Tailwind CSS v4 | Implemented — see [frontend/README.md](frontend/README.md); tested with Vitest + Playwright |
+| CI | GitHub Actions (`.github/workflows/`) | Implemented — `ci.yml` (backend `ruff`/`mypy`/`pytest`+coverage against real PostgreSQL, frontend `eslint`/`tsc`/Vitest+coverage/`next build`, Playwright E2E), `security.yml` (`pip-audit`, `npm audit`, gitleaks), `codeql.yml` |
 | Containerization / CD | Docker, deployment pipeline | Planned |
 
 The database layer is implemented and tested, but scoped narrowly:
@@ -552,7 +553,8 @@ agentcare/
 ├── scripts/             # Developer/operational scripts (not yet implemented)
 ├── tests/               # Cross-cutting/integration tests (not yet implemented)
 ├── .github/
-│   ├── workflows/ci.yml # CI: backend (ruff/mypy/pytest) + frontend (eslint/tsc/build)
+│   ├── workflows/       # ci.yml (backend/frontend/E2E), security.yml, codeql.yml
+│   ├── dependabot.yml   # Weekly pip/npm/actions update PRs
 │   └── pull_request_template.md
 ├── .env.example         # Safe, placeholder-only backend environment template
 ├── .gitignore
@@ -673,6 +675,7 @@ Run the test suite and quality checks from `backend/`:
 
 ```powershell
 pytest
+pytest --cov=app --cov-report=term-missing   # enforces the coverage floor CI uses
 ruff check .
 mypy app
 ```
@@ -694,15 +697,17 @@ npm run dev
 The app runs at `http://localhost:3000`. See
 [frontend/README.md](frontend/README.md) for the frontend's architecture
 (it's a backend-for-frontend: the browser never calls the FastAPI backend
-directly), directory layout, and known limitations — most notably, **no
-automated frontend test suite exists yet**.
+directly), directory layout, and known limitations.
 
-Lint/typecheck/build from `frontend/` (the same checks CI runs):
+Lint/typecheck/test/build from `frontend/` (the same checks CI runs):
 
 ```powershell
 npm run lint
 npx tsc --noEmit
+npm run test:coverage
 npm run build
+npm run test:e2e        # Playwright; needs DATABASE_URL + JWT_SECRET_KEY —
+                        # see frontend/README.md "Available scripts"
 ```
 
 ## Security Warning
