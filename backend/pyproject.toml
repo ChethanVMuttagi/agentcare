@@ -53,7 +53,7 @@ dev = [
     # remains the production database — see docs/DATABASE.md.
     "aiosqlite>=0.20,<1.0",
     "ruff>=0.7,<1.0",
-    "mypy>=1.13,<2.0",
+    "mypy>=1.13,<3.0",
     # Coverage measurement + enforcement (Sprint 3) — see
     # [tool.coverage.*] below and .github/workflows/ci.yml.
     "pytest-cov>=5.0,<7.0",
