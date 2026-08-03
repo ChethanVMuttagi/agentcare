@@ -56,7 +56,7 @@ dev = [
     "mypy>=1.13,<2.0",
     # Coverage measurement + enforcement (Sprint 3) — see
     # [tool.coverage.*] below and .github/workflows/ci.yml.
-    "pytest-cov>=5.0,<7.0",
+    "pytest-cov>=5.0,<8.0",
     # Property-based testing (Sprint 3) — see tests/*/test_*_properties.py.
     "hypothesis>=6.100,<7.0",
     # Dependency vulnerability scanning (Sprint 3) — see
